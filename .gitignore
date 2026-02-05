@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.build
+.venv
+.env
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.build/
+dist/
+*.egg-info/
+proto_gen/
+src/raft/rpc/proto/*_pb2*.py
