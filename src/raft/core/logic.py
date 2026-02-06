@@ -185,3 +185,13 @@ class RaftCore:
                 self.logger.warning("append to %s failed: %s", peer, e)
 
         await asyncio.gather(*(send(p) for p in self.state.peers))
+
+    async def maybe_advance_commit_index(self) -> None:
+        match_indexes = [self.state.progress[p].match_index for p in self.state.peers]
+        match_indexes.append(self.state.last_log_index_term()[0])
+        match_indexes.sort()
+        majority_match = match_indexes[len(match_indexes) // 2]
+        _, term_at_idx = self.state.last_log_index_term()
+        if majority_match > self.state.commit_index and term_at_idx == self.state.current_term:
+            self.state.commit_index = majority_match
+            self.state.apply_entries()
