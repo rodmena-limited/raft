@@ -142,3 +142,46 @@ class RaftCore:
                 await asyncio.sleep(self.state.heartbeat_ms / 1000.0)
 
         self.heartbeat_task = asyncio.create_task(loop())
+
+    async def broadcast_append_entries(self) -> None:
+        last_index, last_term = self.state.last_log_index_term()
+
+        async def send(peer: str) -> None:
+            progress = self.state.progress[peer]
+            prev_index = progress.next_index - 1
+            entries = self.state.read_entries(progress.next_index)
+            prev_term = 0
+            if prev_index > 0:
+                prev_entries = self.state.read_entries(prev_index, prev_index + 1)
+                if prev_entries:
+                    prev_term = prev_entries[0].term
+            req = raft_pb2.AppendEntriesRequest(
+                term=self.state.current_term,
+                leader_id=self.state.node_id,
+                prev_log_index=prev_index,
+                prev_log_term=prev_term,
+                entries=[
+                    raft_pb2.LogEntry(index=e.index, term=e.term, data=e.data) for e in entries
+                ],
+                leader_commit=self.state.commit_index,
+            )
+            try:
+                async with self.rpc_client_factory(peer) as client:
+                    resp = await client.AppendEntries(req)
+                if resp.term > self.state.current_term:
+                    self.state.become_follower(resp.term)
+                    return
+                if resp.success:
+                    if entries:
+                        progress.match_index = entries[-1].index
+                        progress.next_index = progress.match_index + 1
+                    else:
+                        progress.match_index = prev_index
+                        progress.next_index = progress.match_index + 1
+                    await self.maybe_advance_commit_index()
+                else:
+                    progress.next_index = max(1, progress.next_index - 1)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("append to %s failed: %s", peer, e)
+
+        await asyncio.gather(*(send(p) for p in self.state.peers))
