@@ -79,3 +79,22 @@ class RaftCore:
         return raft_pb2.AppendEntriesResponse(
             term=self.state.current_term, success=True, match_index=match_index
         )
+
+    async def handle_install_snapshot(
+        self, req: raft_pb2.InstallSnapshotRequest
+    ) -> raft_pb2.InstallSnapshotResponse:
+        if req.term < self.state.current_term:
+            return raft_pb2.InstallSnapshotResponse(term=self.state.current_term, accepted=False)
+
+        self.state.become_follower(req.term, leader_hint=req.leader_id)
+        # For simplicity, directly store snapshot and reset log
+        from raft.storage import SnapshotMetadata
+
+        meta = SnapshotMetadata(
+            last_included_index=req.last_included_index, last_included_term=req.last_included_term
+        )
+        self.state.snapshots.store_snapshot(meta, req.data)
+        self.state.truncate_suffix(req.last_included_index)
+        self.state.commit_index = max(self.state.commit_index, req.last_included_index)
+        self.state.apply_entries()
+        return raft_pb2.InstallSnapshotResponse(term=self.state.current_term, accepted=True)
