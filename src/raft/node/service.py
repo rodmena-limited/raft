@@ -11,3 +11,6 @@ from raft.util import get_logger
 class RaftServicer(raft_pb2_grpc.RaftServicer):
     def __init__(self, core: RaftCore):
         self.core = core
+
+    async def RequestVote(self, request, context):
+        return await self.core.handle_request_vote(request)
