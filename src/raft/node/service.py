@@ -71,3 +71,8 @@ class RaftNode:
         await self.server.start()
         self.logger.info("node started on %s", self.bind)
         asyncio.create_task(self._run_election_timer())
+
+    async def _run_election_timer(self) -> None:
+        while True:
+            await asyncio.sleep(0.01)
+            await self.core.maybe_start_election()
