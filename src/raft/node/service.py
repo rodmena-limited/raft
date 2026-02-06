@@ -66,3 +66,8 @@ class RaftNode:
         self.server = grpc.aio.server(options=[("grpc.so_reuseport", 0)])
         raft_pb2_grpc.add_RaftServicer_to_server(RaftServicer(self.core), self.server)
         self.server.add_insecure_port(bind)
+
+    async def start(self) -> None:
+        await self.server.start()
+        self.logger.info("node started on %s", self.bind)
+        asyncio.create_task(self._run_election_timer())
