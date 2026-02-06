@@ -77,3 +77,9 @@ class RaftState:
 
     def last_log_index_term(self) -> tuple[int, int]:
         return self.storage.last_index_term()
+
+    def append_log_entries(self, entries: list[LogEntryRecord]) -> None:
+        self.storage.append_entries(entries)
+
+    def truncate_suffix(self, index: int) -> None:
+        self.storage.truncate_suffix(index)
