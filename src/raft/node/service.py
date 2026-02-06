@@ -17,3 +17,6 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
 
     async def AppendEntries(self, request, context):
         return await self.core.handle_append_entries(request)
+
+    async def InstallSnapshot(self, request, context):
+        return await self.core.handle_install_snapshot(request)
