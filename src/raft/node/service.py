@@ -20,3 +20,7 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
 
     async def InstallSnapshot(self, request, context):
         return await self.core.handle_install_snapshot(request)
+
+    async def ClientWrite(self, request, context):
+        accepted, index, term = await self.core.client_write(request.data)
+        return raft_pb2.ClientWriteResponse(accepted=accepted, index=index, term=term)
