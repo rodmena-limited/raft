@@ -28,3 +28,41 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
     async def ChangeMembership(self, request, context):
         # Stub; real joint consensus not fully implemented in this simplified version
         return raft_pb2.MembershipChangeResponse(accepted=False, message="not implemented")
+
+class RaftNode:
+    def __init__(
+        self,
+        node_id: str,
+        peers: list[str],
+        storage: LogStorage,
+        snapshots: SnapshotStore,
+        state_machine: StateMachine,
+        *,
+        bind: str,
+        election_min_ms: int,
+        election_jitter_ms: int,
+        heartbeat_ms: int,
+    ) -> None:
+        self.state = RaftState(
+            node_id=node_id,
+            peers=peers,
+            storage=storage,
+            snapshots=snapshots,
+            state_machine=state_machine,
+            election_min_ms=election_min_ms,
+            election_jitter_ms=election_jitter_ms,
+            heartbeat_ms=heartbeat_ms,
+        )
+        self.logger = get_logger(f"raft.node.{node_id}")
+        self.bind = bind
+
+        @asynccontextmanager
+        async def client_factory(target: str):
+            async with grpc.aio.insecure_channel(target) as channel:
+                stub = raft_pb2_grpc.RaftStub(channel)
+                yield stub
+
+        self.core = RaftCore(self.state, client_factory)
+        self.server = grpc.aio.server(options=[("grpc.so_reuseport", 0)])
+        raft_pb2_grpc.add_RaftServicer_to_server(RaftServicer(self.core), self.server)
+        self.server.add_insecure_port(bind)
