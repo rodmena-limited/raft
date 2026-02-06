@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import enum
 from dataclasses import dataclass
+
 from raft.storage import (
     LogEntryRecord,
     LogMetadata,
@@ -11,15 +13,18 @@ from raft.storage import (
 )
 from raft.util import get_logger, monotonic_ms, randomized_timeout_ms
 
+
 class Role(enum.Enum):
-    FOLLOWER = 'follower'
-    CANDIDATE = 'candidate'
-    LEADER = 'leader'
+    FOLLOWER = "follower"
+    CANDIDATE = "candidate"
+    LEADER = "leader"
+
 
 @dataclass
 class PeerProgress:
     match_index: int = 0
     next_index: int = 1
+
 
 class RaftState:
     def __init__(
@@ -75,6 +80,7 @@ class RaftState:
             )
         )
 
+    # Log helpers
     def last_log_index_term(self) -> tuple[int, int]:
         return self.storage.last_index_term()
 
@@ -87,6 +93,7 @@ class RaftState:
     def read_entries(self, start: int, end: int | None = None) -> list[LogEntryRecord]:
         return self.storage.read_entries(start, end)
 
+    # Snapshot helpers
     def maybe_snapshot(self, snapshot_threshold: int, trailing: int) -> None:
         last_index, _ = self.last_log_index_term()
         first_index = self.storage.first_index()
@@ -102,6 +109,7 @@ class RaftState:
             self.snapshots.store_snapshot(snap_meta, data)
             self.storage.truncate_suffix(snap_meta.last_included_index)
 
+    # Apply committed entries to state machine
     def apply_entries(self) -> None:
         entries = self.read_entries(self.last_applied + 1, self.commit_index + 1)
         for entry in entries:
@@ -109,6 +117,7 @@ class RaftState:
             self.last_applied = entry.index
         self.persist_metadata()
 
+    # Role transitions
     def become_follower(self, term: int, leader_hint: str | None = None) -> None:
         if term > self.current_term:
             self.current_term = term
@@ -117,3 +126,18 @@ class RaftState:
         self.role = Role.FOLLOWER
         self.reset_election_deadline()
         self.logger.info("become follower term=%s leader=%s", self.current_term, leader_hint)
+
+    def become_candidate(self) -> None:
+        self.role = Role.CANDIDATE
+        self.current_term += 1
+        self.voted_for = self.node_id
+        self.persist_metadata()
+        self.reset_election_deadline()
+        self.logger.info("become candidate term=%s", self.current_term)
+
+    def become_leader(self) -> None:
+        self.role = Role.LEADER
+        last_index, _ = self.last_log_index_term()
+        for peer in self.peers:
+            self.progress[peer] = PeerProgress(match_index=0, next_index=last_index + 1)
+        self.logger.info("become leader term=%s", self.current_term)
