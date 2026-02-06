@@ -131,3 +131,14 @@ class RaftCore:
         if votes >= needed:
             self.state.become_leader()
             await self.start_heartbeat_loop()
+
+    async def start_heartbeat_loop(self) -> None:
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+
+        async def loop():
+            while self.state.role == Role.LEADER:
+                await self.broadcast_append_entries()
+                await asyncio.sleep(self.state.heartbeat_ms / 1000.0)
+
+        self.heartbeat_task = asyncio.create_task(loop())
