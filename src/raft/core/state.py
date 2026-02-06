@@ -64,3 +64,16 @@ class RaftState:
         self.election_deadline_ms = monotonic_ms() + randomized_timeout_ms(
             self.election_min_ms, self.election_jitter_ms
         )
+
+    def persist_metadata(self) -> None:
+        self.storage.store_metadata(
+            LogMetadata(
+                term=self.current_term,
+                voted_for=self.voted_for,
+                commit_index=self.commit_index,
+                last_applied=self.last_applied,
+            )
+        )
+
+    def last_log_index_term(self) -> tuple[int, int]:
+        return self.storage.last_index_term()
