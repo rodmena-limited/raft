@@ -20,3 +20,47 @@ class Role(enum.Enum):
 class PeerProgress:
     match_index: int = 0
     next_index: int = 1
+
+class RaftState:
+    def __init__(
+        self,
+        node_id: str,
+        peers: list[str],
+        storage: LogStorage,
+        snapshots: SnapshotStore,
+        state_machine: StateMachine,
+        election_min_ms: int,
+        election_jitter_ms: int,
+        heartbeat_ms: int,
+    ) -> None:
+        self.node_id = node_id
+        self.peers = peers
+        self.storage = storage
+        self.snapshots = snapshots
+        self.sm = state_machine
+
+        self.role: Role = Role.FOLLOWER
+        self.current_term = 0
+        self.voted_for: str | None = None
+        self.commit_index = 0
+        self.last_applied = 0
+
+        meta = self.storage.load_metadata()
+        self.current_term = meta.term
+        self.voted_for = meta.voted_for
+        self.commit_index = meta.commit_index
+        self.last_applied = meta.last_applied
+
+        self.heartbeat_ms = heartbeat_ms
+        self.election_min_ms = election_min_ms
+        self.election_jitter_ms = election_jitter_ms
+
+        self.reset_election_deadline()
+
+        self.progress: dict[str, PeerProgress] = {p: PeerProgress() for p in peers}
+        self.logger = get_logger(f"raft.{node_id}")
+
+    def reset_election_deadline(self) -> None:
+        self.election_deadline_ms = monotonic_ms() + randomized_timeout_ms(
+            self.election_min_ms, self.election_jitter_ms
+        )
