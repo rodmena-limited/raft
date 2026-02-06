@@ -1,9 +1,13 @@
 from __future__ import annotations
+
 import asyncio
+
 from raft.rpc.proto import raft_pb2
 from raft.storage import LogEntryRecord
 from raft.util import get_logger
+
 from .state import RaftState, Role
+
 
 class RaftCore:
     def __init__(self, state: RaftState, rpc_client_factory):
@@ -195,3 +199,12 @@ class RaftCore:
         if majority_match > self.state.commit_index and term_at_idx == self.state.current_term:
             self.state.commit_index = majority_match
             self.state.apply_entries()
+
+    async def client_write(self, data: bytes) -> tuple[bool, int, int]:
+        if self.state.role != Role.LEADER:
+            return False, 0, self.state.current_term
+        last_index, _ = self.state.last_log_index_term()
+        entry = LogEntryRecord(index=last_index + 1, term=self.state.current_term, data=data)
+        self.state.append_log_entries([entry])
+        await self.broadcast_append_entries()
+        return True, entry.index, entry.term
