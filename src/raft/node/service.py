@@ -14,3 +14,6 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
 
     async def RequestVote(self, request, context):
         return await self.core.handle_request_vote(request)
+
+    async def AppendEntries(self, request, context):
+        return await self.core.handle_append_entries(request)
