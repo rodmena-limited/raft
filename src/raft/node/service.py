@@ -24,3 +24,7 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
     async def ClientWrite(self, request, context):
         accepted, index, term = await self.core.client_write(request.data)
         return raft_pb2.ClientWriteResponse(accepted=accepted, index=index, term=term)
+
+    async def ChangeMembership(self, request, context):
+        # Stub; real joint consensus not fully implemented in this simplified version
+        return raft_pb2.MembershipChangeResponse(accepted=False, message="not implemented")
