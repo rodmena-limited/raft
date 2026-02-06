@@ -101,3 +101,19 @@ class RaftState:
             )
             self.snapshots.store_snapshot(snap_meta, data)
             self.storage.truncate_suffix(snap_meta.last_included_index)
+
+    def apply_entries(self) -> None:
+        entries = self.read_entries(self.last_applied + 1, self.commit_index + 1)
+        for entry in entries:
+            self.sm.apply(entry.data)
+            self.last_applied = entry.index
+        self.persist_metadata()
+
+    def become_follower(self, term: int, leader_hint: str | None = None) -> None:
+        if term > self.current_term:
+            self.current_term = term
+            self.voted_for = None
+            self.persist_metadata()
+        self.role = Role.FOLLOWER
+        self.reset_election_deadline()
+        self.logger.info("become follower term=%s leader=%s", self.current_term, leader_hint)
