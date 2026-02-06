@@ -83,3 +83,21 @@ class RaftState:
 
     def truncate_suffix(self, index: int) -> None:
         self.storage.truncate_suffix(index)
+
+    def read_entries(self, start: int, end: int | None = None) -> list[LogEntryRecord]:
+        return self.storage.read_entries(start, end)
+
+    def maybe_snapshot(self, snapshot_threshold: int, trailing: int) -> None:
+        last_index, _ = self.last_log_index_term()
+        first_index = self.storage.first_index()
+        if last_index - first_index < snapshot_threshold:
+            return
+        snapshot_index = last_index - trailing
+        entries = self.read_entries(first_index, snapshot_index + 1)
+        data = b"".join(e.data for e in entries)  # simplistic; state machine could snapshot itself
+        if entries:
+            snap_meta = SnapshotMetadata(
+                last_included_index=entries[-1].index, last_included_term=entries[-1].term
+            )
+            self.snapshots.store_snapshot(snap_meta, data)
+            self.storage.truncate_suffix(snap_meta.last_included_index)
