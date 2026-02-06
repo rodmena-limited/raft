@@ -98,3 +98,36 @@ class RaftCore:
         self.state.commit_index = max(self.state.commit_index, req.last_included_index)
         self.state.apply_entries()
         return raft_pb2.InstallSnapshotResponse(term=self.state.current_term, accepted=True)
+
+    async def maybe_start_election(self) -> None:
+        if monotonic_ms() < self.state.election_deadline_ms:
+            return
+        self.state.become_candidate()
+        votes = 1  # vote for self
+        needed = (len(self.state.peers) + 1) // 2 + 1
+
+        last_index, last_term = self.state.last_log_index_term()
+        req = raft_pb2.RequestVoteRequest(
+            term=self.state.current_term,
+            candidate_id=self.state.node_id,
+            last_log_index=last_index,
+            last_log_term=last_term,
+        )
+
+        async def ask_peer(peer: str) -> bool:
+            try:
+                async with self.rpc_client_factory(peer) as client:
+                    resp = await client.RequestVote(req)
+                if resp.term > self.state.current_term:
+                    self.state.become_follower(resp.term)
+                    return False
+                return resp.vote_granted
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("vote request to %s failed: %s", peer, e)
+                return False
+
+        results = await asyncio.gather(*(ask_peer(p) for p in self.state.peers))
+        votes += sum(1 for r in results if r)
+        if votes >= needed:
+            self.state.become_leader()
+            await self.start_heartbeat_loop()
