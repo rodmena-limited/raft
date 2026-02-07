@@ -1,12 +1,16 @@
 from __future__ import annotations
+
 import asyncio
 from contextlib import asynccontextmanager
+
 import grpc
+
 from raft.core.logic import RaftCore
 from raft.core.state import RaftState
 from raft.rpc.proto import raft_pb2, raft_pb2_grpc
 from raft.storage import LogStorage, SnapshotStore, StateMachine
 from raft.util import get_logger
+
 
 class RaftServicer(raft_pb2_grpc.RaftServicer):
     def __init__(self, core: RaftCore):
@@ -28,6 +32,7 @@ class RaftServicer(raft_pb2_grpc.RaftServicer):
     async def ChangeMembership(self, request, context):
         # Stub; real joint consensus not fully implemented in this simplified version
         return raft_pb2.MembershipChangeResponse(accepted=False, message="not implemented")
+
 
 class RaftNode:
     def __init__(
@@ -76,3 +81,9 @@ class RaftNode:
         while True:
             await asyncio.sleep(0.01)
             await self.core.maybe_start_election()
+
+    async def stop(self) -> None:
+        await self.server.stop(grace=None)
+        if self.core.heartbeat_task:
+            self.core.heartbeat_task.cancel()
+        self.logger.info("node stopped")
