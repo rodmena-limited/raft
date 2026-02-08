@@ -36,3 +36,8 @@ class FsLogStorage(LogStorage):
             pickle.dump(meta, f)
             f.flush()
             os.fsync(f.fileno())
+
+    def append_entries(self, entries: Iterable[LogEntryRecord]) -> None:
+        current = self._read_log()
+        current.extend(entries)
+        self._write_log(current)
