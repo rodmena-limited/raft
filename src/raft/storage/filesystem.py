@@ -41,3 +41,9 @@ class FsLogStorage(LogStorage):
         current = self._read_log()
         current.extend(entries)
         self._write_log(current)
+
+    def read_entries(self, start: int, end: int | None = None) -> list[LogEntryRecord]:
+        log = self._read_log()
+        if end is None:
+            return [e for e in log if e.index >= start]
+        return [e for e in log if start <= e.index < end]
