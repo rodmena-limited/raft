@@ -15,3 +15,12 @@ class LogMetadata:
 class SnapshotMetadata:
     last_included_index: int
     last_included_term: int
+
+@dataclass
+class LogEntryRecord:
+    index: int
+    term: int
+    data: bytes
+
+class LogStorage(abc.ABC):
+    pass
