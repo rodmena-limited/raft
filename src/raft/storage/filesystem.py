@@ -47,3 +47,8 @@ class FsLogStorage(LogStorage):
         if end is None:
             return [e for e in log if e.index >= start]
         return [e for e in log if start <= e.index < end]
+
+    def truncate_suffix(self, index: int) -> None:
+        log = self._read_log()
+        truncated = [e for e in log if e.index <= index]
+        self._write_log(truncated)
