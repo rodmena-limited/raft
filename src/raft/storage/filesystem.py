@@ -20,3 +20,9 @@ class FsLogStorage(LogStorage):
     def _read_log(self) -> list[LogEntryRecord]:
         with self.log_path.open("rb") as f:
             return pickle.load(f)
+
+    def _write_log(self, entries: list[LogEntryRecord]) -> None:
+        with self.log_path.open("wb") as f:
+            pickle.dump(entries, f)
+            f.flush()
+            os.fsync(f.fileno())
