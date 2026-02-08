@@ -59,3 +59,7 @@ class FsLogStorage(LogStorage):
             return 0, 0
         last = log[-1]
         return last.index, last.term
+
+    def first_index(self) -> int:
+        log = self._read_log()
+        return log[0].index if log else 0
