@@ -70,3 +70,11 @@ class FsSnapshotStore(SnapshotStore):
         self.base.mkdir(parents=True, exist_ok=True)
         self.snap_meta_path = self.base / "snapshot.meta"
         self.snap_data_path = self.base / "snapshot.bin"
+
+    def load_snapshot(self) -> tuple[SnapshotMetadata, bytes] | None:
+        if not self.snap_meta_path.exists() or not self.snap_data_path.exists():
+            return None
+        with self.snap_meta_path.open("rb") as f:
+            meta = pickle.load(f)
+        data = self.snap_data_path.read_bytes()
+        return meta, data
