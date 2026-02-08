@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import os
 import pickle
 from collections.abc import Iterable
 from pathlib import Path
+
 from .interfaces import LogEntryRecord, LogMetadata, LogStorage, SnapshotMetadata, SnapshotStore
+
 
 class FsLogStorage(LogStorage):
     def __init__(self, base_dir: str):
@@ -64,6 +67,7 @@ class FsLogStorage(LogStorage):
         log = self._read_log()
         return log[0].index if log else 0
 
+
 class FsSnapshotStore(SnapshotStore):
     def __init__(self, base_dir: str):
         self.base = Path(base_dir)
@@ -78,3 +82,13 @@ class FsSnapshotStore(SnapshotStore):
             meta = pickle.load(f)
         data = self.snap_data_path.read_bytes()
         return meta, data
+
+    def store_snapshot(self, meta: SnapshotMetadata, data: bytes) -> None:
+        with self.snap_meta_path.open("wb") as f:
+            pickle.dump(meta, f)
+            f.flush()
+            os.fsync(f.fileno())
+        with self.snap_data_path.open("wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
