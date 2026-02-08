@@ -23,4 +23,7 @@ class LogEntryRecord:
     data: bytes
 
 class LogStorage(abc.ABC):
-    pass
+
+    def load_metadata(self) -> LogMetadata: ...
+
+    def store_metadata(self, meta: LogMetadata) -> None: ...
