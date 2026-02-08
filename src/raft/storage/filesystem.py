@@ -52,3 +52,10 @@ class FsLogStorage(LogStorage):
         log = self._read_log()
         truncated = [e for e in log if e.index <= index]
         self._write_log(truncated)
+
+    def last_index_term(self) -> tuple[int, int]:
+        log = self._read_log()
+        if not log:
+            return 0, 0
+        last = log[-1]
+        return last.index, last.term
