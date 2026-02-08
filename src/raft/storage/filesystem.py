@@ -63,3 +63,10 @@ class FsLogStorage(LogStorage):
     def first_index(self) -> int:
         log = self._read_log()
         return log[0].index if log else 0
+
+class FsSnapshotStore(SnapshotStore):
+    def __init__(self, base_dir: str):
+        self.base = Path(base_dir)
+        self.base.mkdir(parents=True, exist_ok=True)
+        self.snap_meta_path = self.base / "snapshot.meta"
+        self.snap_data_path = self.base / "snapshot.bin"
