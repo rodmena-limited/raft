@@ -30,3 +30,9 @@ class FsLogStorage(LogStorage):
     def load_metadata(self) -> LogMetadata:
         with self.meta_path.open("rb") as f:
             return pickle.load(f)
+
+    def store_metadata(self, meta: LogMetadata) -> None:
+        with self.meta_path.open("wb") as f:
+            pickle.dump(meta, f)
+            f.flush()
+            os.fsync(f.fileno())
