@@ -26,3 +26,7 @@ class FsLogStorage(LogStorage):
             pickle.dump(entries, f)
             f.flush()
             os.fsync(f.fileno())
+
+    def load_metadata(self) -> LogMetadata:
+        with self.meta_path.open("rb") as f:
+            return pickle.load(f)
