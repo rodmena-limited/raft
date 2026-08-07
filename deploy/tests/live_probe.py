@@ -465,6 +465,41 @@ def probe_docs() -> None:
           r.status_code == 200 and '"health":"true"' in r.text, r.text.strip()[:120])
 
 
+def probe_container_healthchecks() -> None:
+    section("Container healthchecks")
+    # Regression probe. Enabling auth silently broke the healthcheck: it ran
+    # `etcdctl endpoint health` anonymously, auth rejected it, and all three
+    # members reported unhealthy forever while the service was demonstrably
+    # fine. A check that can never go green is worthless in both directions --
+    # it can neither confirm health nor raise an alarm.
+    names = ["consensus-etcd1", "consensus-etcd2", "consensus-etcd3"]
+    p = subprocess.run(
+        ["docker", "inspect", *names, "--format", "{{.Name}} {{.State.Health.Status}}"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if p.returncode != 0:
+        print("  SKIPPED: docker not reachable from here (probe is running off-host)")
+        return
+
+    lines = [ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
+    # Exact match on the status word -- "unhealthy" contains "healthy", so a
+    # substring test would pass on exactly the failure it is meant to catch.
+    healthy = [ln for ln in lines if ln.rsplit(" ", 1)[-1] == "healthy"]
+    check(f"all {len(names)} members report healthy to Docker",
+          len(healthy) == len(names), "\n".join(lines))
+
+    # Known-negative: prove the healthcheck command actually discriminates
+    # rather than returning success unconditionally.
+    p = subprocess.run(
+        ["docker", "exec", "-e", "ETCDCTL_USER=app:deliberately-wrong",
+         "-e", "ETCDCTL_ENDPOINTS=http://127.0.0.1:2379",
+         names[0], "etcdctl", "endpoint", "health"],
+        capture_output=True, text=True, timeout=60,
+    )
+    check("the healthcheck reports unhealthy on bad credentials (known-negative)",
+          p.returncode != 0, (p.stderr or p.stdout).strip()[:160])
+
+
 def probe_token_survives_restart() -> None:
     section("Auth token durability across member restarts")
     if not DESTRUCTIVE:
@@ -550,10 +585,12 @@ def probe_fault_tolerance() -> None:
     check("data written before the failure survived it",
           kv_get(key) == "after-recovery", f"got={kv_get(key)!r}")
 
+    # Use the container's own ETCDCTL_USER (from /etc/consensus/healthcheck.env)
+    # rather than passing --user: etcdctl exits fatal when a flag and its
+    # corresponding environment variable are both set. This also exercises the
+    # exact identity the Docker healthcheck uses.
     p = subprocess.run(
-        ["docker", "exec", "consensus-etcd1", "etcdctl",
-         "--endpoints=http://127.0.0.1:2379", f"--user={USER}:{PASSWORD}",
-         "endpoint", "health", "--cluster"],
+        ["docker", "exec", "consensus-etcd1", "etcdctl", "endpoint", "health", "--cluster"],
         capture_output=True, text=True, timeout=60,
     )
     healthy = (p.stdout + p.stderr).count("is healthy")
@@ -599,6 +636,7 @@ def main() -> None:
     probe_blocked_endpoints()
     probe_grpc()
     probe_docs()
+    probe_container_healthchecks()
     probe_token_survives_restart()
     probe_fault_tolerance()
     summarise_and_exit()

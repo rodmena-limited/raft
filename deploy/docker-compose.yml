@@ -44,8 +44,13 @@ services:
       --enable-v2=false
       --logger zap
       --log-level info
+    # Credentials for the healthcheck only (app user, never root). Written by
+    # scripts/bootstrap-auth.sh. Without it `endpoint health` runs anonymously,
+    # auth rejects it, and every member reports unhealthy forever.
+    env_file: &envfile
+      - /etc/consensus/healthcheck.env
     healthcheck: &hc
-      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
+      test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,6 +63,7 @@ services:
   etcd2:
     <<: *etcd
     container_name: consensus-etcd2
+    env_file: *envfile
     ports:
       - "127.0.0.1:2479:2379"
     volumes:
@@ -89,6 +95,7 @@ services:
   etcd3:
     <<: *etcd
     container_name: consensus-etcd3
+    env_file: *envfile
     ports:
       - "127.0.0.1:2579:2379"
     volumes:
