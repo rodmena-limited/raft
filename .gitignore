@@ -15,3 +15,9 @@ dist/
 *.egg-info/
 proto_gen/
 src/raft/rpc/proto/*_pb2*.py
+
+# issuedb local database
+.issue.db
+
+# omo scratch
+.omo/

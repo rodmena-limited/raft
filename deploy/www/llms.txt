@@ -1,0 +1,387 @@
+# consensus.rodmena.co.uk
+
+> Strongly-consistent distributed key-value store for Rodmena services. It is a
+> 3-member **etcd v3.5.17** cluster behind TLS: linearizable reads and writes,
+> compare-and-swap transactions, TTL leases, and change notification via watch.
+> Use it for coordination — leader election, distributed locks, service
+> discovery, feature flags, live configuration. Do not use it as a general
+> database.
+
+Every statement on this page was verified against the live service through its
+public HTTPS interface. Where behaviour is surprising, the surprise is written
+down rather than smoothed over.
+
+- **Base URL:** `https://consensus.rodmena.co.uk`
+- **Engine:** etcd 3.5.17, 3 voting members, Raft quorum of 2
+- **Auth:** required for every key operation. No anonymous access.
+- **Credentials:** issued by the operator (farshid@rodmena.co.uk). None are published here.
+
+## Two ways in — pick one
+
+| Interface | Endpoint | Use when |
+|---|---|---|
+| **gRPC** (native etcd protocol) | `consensus.rodmena.co.uk:443` | You have a real etcd client: `etcdctl`, Go `go.etcd.io/etcd/client/v3`, Java, Rust. Best performance, native watch/lease streams. |
+| **HTTP/JSON** (etcd gRPC-gateway) | `https://consensus.rodmena.co.uk/v3/...` | You want plain HTTPS. Works from `curl`, any language, no etcd SDK needed. |
+
+Both hit the same cluster and the same data. TLS is a normal publicly-trusted
+Let's Encrypt certificate — no custom CA, no client certificates.
+
+## Authentication
+
+Exchange a username and password for a token, then send that token on every
+request.
+
+```bash
+TOKEN=$(curl -s -X POST https://consensus.rodmena.co.uk/v3/auth/authenticate \
+  -d '{"name":"YOUR_USER","password":"YOUR_PASSWORD"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+```
+
+Send it as a bare `Authorization` header. **There is no `Bearer ` prefix** — this
+is the most common integration mistake:
+
+```bash
+curl -H "Authorization: $TOKEN" ...     # correct
+curl -H "Authorization: Bearer $TOKEN"  # WRONG, rejected
+```
+
+Tokens are **JWTs with a 30 minute TTL**, signed by the cluster. Two consequences
+worth building for:
+
+- **Renew.** Treat HTTP 401, or `{"error":"etcdserver: invalid auth token"}`, as
+  "re-authenticate once and retry", not as fatal. A long-lived process that
+  authenticates only at startup will begin failing after 30 minutes.
+- **Restarts do not invalidate your token.** Because the tokens are signed
+  rather than held in a single member's memory, any member can verify one. A
+  rolling restart of the cluster does not log your application out — verified by
+  restarting all three members while holding one token.
+
+An unauthenticated key request fails with:
+
+```json
+{"error":"etcdserver: user name is empty","code":3}
+```
+
+## The base64 rule
+
+**In the HTTP/JSON API every key and every value is base64-encoded**, in both
+requests and responses. etcd keys and values are arbitrary bytes, and JSON
+cannot carry bytes. Forgetting this is the second most common mistake: you will
+successfully store a key whose literal name is the base64 text.
+
+gRPC clients do not have this problem — they send raw bytes.
+
+## Every integer is a JSON string
+
+etcd's gateway renders all 64-bit fields as **strings**, because JSON numbers
+cannot hold int64 safely:
+
+```json
+{"header":{"revision":"13","raft_term":"2"},"count":"1",
+ "kvs":[{"create_revision":"3","mod_revision":"3","version":"1"}]}
+```
+
+So `revision`, `count`, `version`, `create_revision`, `mod_revision`, lease `ID`
+and `TTL` all arrive as strings. Cast explicitly (`int(r["header"]["revision"])`)
+and never compare them as numbers without casting — `"13" > "9"` is `False` in
+most languages. Keep lease IDs as strings; they overflow a JavaScript number.
+
+## Key-value operations (HTTP/JSON)
+
+Helper used below: `b64() { printf "%s" "$1" | base64 -w0; }`
+
+### Put
+
+```bash
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/put \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\",\"value\":\"$(b64 30s)\"}"
+```
+
+Response carries the cluster revision — a global, monotonically increasing
+logical clock you can use for ordering and for resuming watches:
+
+```json
+{"header":{"cluster_id":"...","member_id":"...","revision":"7","raft_term":"2"}}
+```
+
+### Get one key
+
+```bash
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/range \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\"}"
+```
+
+A miss returns no `kvs` array at all and `count` is absent — **not** an empty
+list and **not** `count: 0`. Use `response.get("kvs", [])`.
+
+### Get a prefix (list)
+
+There is no "prefix" flag. You pass `range_end` = the prefix with its **last
+byte incremented**. For `/myapp/` that is `/myapp0` (`/` is 0x2F, `0` is 0x30).
+
+```bash
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/range \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/)\",\"range_end\":\"$(b64 /myapp0)\"}"
+```
+
+To range over **every** key, use `key` = base64 of a single NUL byte and
+`range_end` the same.
+
+### Delete
+
+```bash
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/deleterange \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\"}"
+# -> {"header":{...},"deleted":"1"}
+```
+
+## Transactions — the compare-and-swap primitive
+
+This is why you use a consensus store. A txn is `compare` → `success` or
+`failure`, applied atomically across the cluster.
+
+Create a key only if nobody else has (`version = 0` means "does not exist"):
+
+```bash
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/txn \
+  -H "Authorization: $TOKEN" \
+  -d "{
+    \"compare\":[{\"key\":\"$(b64 /myapp/leader)\",\"target\":\"VERSION\",\"result\":\"EQUAL\",\"version\":\"0\"}],
+    \"success\":[{\"requestPut\":{\"key\":\"$(b64 /myapp/leader)\",\"value\":\"$(b64 node-a)\"}}],
+    \"failure\":[{\"requestRange\":{\"key\":\"$(b64 /myapp/leader)\"}}]
+  }"
+```
+
+**Critical gotcha.** On success the response contains `"succeeded": true`. On
+failure the field is **omitted entirely** rather than being `false`:
+
+```python
+# WRONG -- treats "field missing" and "field false" identically only by luck,
+# and silently misreads any future shape change
+if resp["succeeded"]: ...
+
+# CORRECT
+if resp.get("succeeded") is True: ...
+```
+
+Other compare targets: `VERSION`, `CREATE` (create_revision), `MOD`
+(mod_revision), `VALUE`. Comparing on `MOD` is how you do optimistic
+concurrency: read a key, note `mod_revision`, then write only if it has not
+changed.
+
+## Leases — keys that expire
+
+A lease is a TTL handle. Keys attached to it are deleted when it expires. This
+is the building block for liveness: locks, leader election, service registration.
+
+```bash
+# 1. grant a 10 second lease
+LID=$(curl -s -X POST https://consensus.rodmena.co.uk/v3/lease/grant \
+  -H "Authorization: $TOKEN" -d '{"TTL":10}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["ID"])')
+
+# 2. attach a key to it
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/put \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/nodes/node-a)\",\"value\":\"$(b64 10.0.0.5:8080)\",\"lease\":\"$LID\"}"
+
+# 3. hold it open -- send this at roughly TTL/3
+curl -s -X POST https://consensus.rodmena.co.uk/v3/lease/keepalive \
+  -H "Authorization: $TOKEN" -d "{\"ID\":\"$LID\"}"
+```
+
+Verified behaviour: the key is present while keepalives continue and disappears
+within a few seconds of them stopping. Lease IDs are **strings** in JSON (they
+are 64-bit ints), so keep them as strings — do not round-trip through a JS
+number.
+
+If your process dies, the lease lapses and the key vanishes on its own. That is
+the point: no cleanup code, no stale registrations.
+
+## Watch — react to changes
+
+Watch is a long-lived streaming response. Each change arrives as one JSON object
+per line.
+
+```bash
+curl -sN -X POST https://consensus.rodmena.co.uk/v3/watch \
+  -H "Authorization: $TOKEN" \
+  -d "{\"create_request\":{\"key\":\"$(b64 /myapp/config/)\",\"range_end\":\"$(b64 /myapp/config0)\"}}"
+```
+
+The first object confirms creation (`"created": true`); subsequent objects carry
+`events`. Each event has `type` (absent means `PUT`, `"DELETE"` for deletes) and
+`kv` with base64 key/value.
+
+Pass `start_revision` to resume without missing anything after a reconnect —
+take the `revision` from your last processed event and add 1. This is what makes
+watch reliable across restarts; without it you have a gap.
+
+Use `-N` (unbuffered) with curl. The edge does not buffer these responses and
+allows streams up to 1 hour.
+
+## Python — no etcd SDK required
+
+Verified working against the live service:
+
+```python
+import base64, httpx
+
+BASE = "https://consensus.rodmena.co.uk"
+
+def b64(s: str) -> str:
+    return base64.b64encode(s.encode()).decode()
+
+def unb64(s: str) -> str:
+    return base64.b64decode(s).decode()
+
+class Consensus:
+    def __init__(self, user: str, password: str):
+        self.c = httpx.Client(base_url=BASE, timeout=10.0)
+        self.token = self.c.post(
+            "/v3/auth/authenticate", json={"name": user, "password": password}
+        ).json()["token"]
+        self.c.headers["Authorization"] = self.token   # no "Bearer"
+
+    def put(self, key: str, value: str) -> int:
+        r = self.c.post("/v3/kv/put", json={"key": b64(key), "value": b64(value)})
+        r.raise_for_status()
+        return int(r.json()["header"]["revision"])
+
+    def get(self, key: str) -> str | None:
+        r = self.c.post("/v3/kv/range", json={"key": b64(key)})
+        r.raise_for_status()
+        kvs = r.json().get("kvs", [])          # absent on a miss, not empty list
+        return unb64(kvs[0]["value"]) if kvs else None
+
+    def list_prefix(self, prefix: str) -> dict[str, str]:
+        end = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        r = self.c.post("/v3/kv/range",
+                        json={"key": b64(prefix), "range_end": b64(end)})
+        r.raise_for_status()
+        return {unb64(kv["key"]): unb64(kv["value"])
+                for kv in r.json().get("kvs", [])}
+
+    def create_if_absent(self, key: str, value: str) -> bool:
+        """Atomic create. True if we won the race, False if it already existed."""
+        r = self.c.post("/v3/kv/txn", json={
+            "compare": [{"key": b64(key), "target": "VERSION",
+                         "result": "EQUAL", "version": "0"}],
+            "success": [{"requestPut": {"key": b64(key), "value": b64(value)}}],
+            "failure": [],
+        })
+        r.raise_for_status()
+        return r.json().get("succeeded") is True   # absent means False
+```
+
+## Go — native gRPC client
+
+```go
+import (
+    "context"
+    "time"
+    clientv3 "go.etcd.io/etcd/client/v3"
+)
+
+cli, err := clientv3.New(clientv3.Config{
+    Endpoints:   []string{"consensus.rodmena.co.uk:443"},
+    DialTimeout: 5 * time.Second,
+    Username:    "YOUR_USER",
+    Password:    "YOUR_PASSWORD",
+    // TLS is a normal public certificate; the zero value uses the system roots.
+    TLS: &tls.Config{},
+})
+defer cli.Close()
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+_, err = cli.Put(ctx, "/myapp/config/timeout", "30s")
+cancel()
+```
+
+## etcdctl
+
+```bash
+etcdctl --endpoints=https://consensus.rodmena.co.uk:443 \
+        --user USER:PASSWORD \
+        put /myapp/key value
+
+etcdctl --endpoints=https://consensus.rodmena.co.uk:443 \
+        --user USER:PASSWORD \
+        get --prefix /myapp/
+```
+
+## Consistency model
+
+- Reads are **linearizable by default**: a read always reflects every write that
+  completed before it started, cluster-wide. This costs a quorum round trip.
+- Add `"serializable": true` to a `range` request for a local, possibly stale
+  read that skips the quorum. Faster; use only where staleness is acceptable.
+- Writes are linearizable, full stop. A successful write is durable on a
+  majority of members.
+- `revision` is a global logical clock across the whole keyspace. It increases on
+  every write to any key, so it orders unrelated keys against each other.
+
+## Limits and refusals
+
+| Limit | Value | Behaviour past it |
+|---|---|---|
+| Request body | 1.5 MB (2 MB at the edge) | Rejected |
+| Value size | Keep under ~1 MB | Rejected |
+| Rate, general API | 100 req/s per IP (burst 200) | HTTP 503 |
+| Rate, `/v3/auth/authenticate` | 10 req/s per IP (burst 20) | HTTP 503 |
+| Stream lifetime (watch, keepalive) | 1 hour | Stream closed; reconnect with `start_revision` |
+| History retention | compacted hourly | Watch from a revision older than ~1h fails |
+
+These endpoints are **blocked at the edge** and return 403 even with valid admin
+credentials. They are operator actions, performed on the host:
+
+```
+/v3/maintenance/snapshot      /v3/cluster/member/add
+/v3/maintenance/defragment    /v3/cluster/member/remove
+/v3/maintenance/downgrade     /v3/cluster/member/update
+/v3/maintenance/alarm         /v3/cluster/member/promote
+/v3/maintenance/transfer-leadership
+/v3/auth/disable
+```
+
+The equivalent gRPC methods are blocked too. A full-database snapshot over the
+public internet is total data exfiltration in a single request, so it is refused
+regardless of who asks.
+
+## Health
+
+`GET /health` is unauthenticated and safe to poll from a load balancer:
+
+```bash
+curl -s https://consensus.rodmena.co.uk/health
+# {"health":"true","reason":""}
+```
+
+## Operational limits you should know
+
+**All three members run on a single host.** The cluster tolerates losing any one
+member — restart, upgrade, crash — and keeps serving. It does **not** survive
+loss of that host. Treat this as a coordination service with strong consistency
+and single-host availability, not as a geo-redundant system. Do not put data here
+whose loss you could not tolerate without a backup elsewhere.
+
+Key naming: use a `/` prefix per application (`/myapp/...`). Users can be scoped
+to a prefix, so a well-namespaced key layout is what makes per-application
+credentials possible later.
+
+## Getting access
+
+Credentials are issued per application by the operator. Ask
+farshid@rodmena.co.uk for a user scoped to your prefix. Do not share one
+credential between unrelated services — a prefix-scoped user per application
+means a leak is contained to that prefix.
+
+## See also
+
+- Human documentation: https://consensus.rodmena.co.uk/docs
+- etcd API reference: https://etcd.io/docs/v3.5/learning/api/
+- etcd gRPC-gateway notes: https://etcd.io/docs/v3.5/dev-guide/api_grpc_gateway/

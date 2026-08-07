@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>consensus.rodmena.co.uk — integration guide</title>
+<meta name="description" content="Strongly-consistent distributed key-value store for Rodmena services, backed by a 3-member etcd cluster.">
+<style>
+:root {
+  --bg: #ffffff;
+  --surface: #f6f7f9;
+  --surface-2: #eceef2;
+  --text: #16191d;
+  --muted: #5c6570;
+  --border: #dfe3e8;
+  --accent: #1f6feb;
+  --accent-soft: #e8f0fe;
+  --warn-bg: #fff8e6;
+  --warn-border: #e6c34a;
+  --warn-text: #6b5200;
+  --code-bg: #f3f4f6;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216;
+    --surface: #161a20;
+    --surface-2: #1e242c;
+    --text: #e6e9ee;
+    --muted: #9aa4b1;
+    --border: #2a313a;
+    --accent: #6ea8ff;
+    --accent-soft: #17233a;
+    --warn-bg: #2a2410;
+    --warn-border: #7a6520;
+    --warn-text: #e8cf7a;
+    --code-bg: #171c22;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #161a20;
+  --surface-2: #1e242c;
+  --text: #e6e9ee;
+  --muted: #9aa4b1;
+  --border: #2a313a;
+  --accent: #6ea8ff;
+  --accent-soft: #17233a;
+  --warn-bg: #2a2410;
+  --warn-border: #7a6520;
+  --warn-text: #e8cf7a;
+  --code-bg: #171c22;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+header.hero { border-bottom: 1px solid var(--border); padding-bottom: 2rem; margin-bottom: 2.5rem; }
+h1 { font-size: 1.9rem; margin: 0 0 .5rem; letter-spacing: -.02em; }
+.sub { color: var(--muted); font-size: 1.05rem; margin: 0 0 1.25rem; }
+.pills { display: flex; flex-wrap: wrap; gap: .5rem; }
+.pill {
+  font: 500 .8rem/1 var(--mono);
+  background: var(--surface-2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: .4rem .7rem;
+}
+h2 {
+  font-size: 1.25rem; margin: 2.75rem 0 .75rem; letter-spacing: -.01em;
+  padding-top: .5rem; border-top: 1px solid var(--border);
+}
+h2:first-of-type { border-top: none; }
+h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
+p { margin: .75rem 0; }
+a { color: var(--accent); }
+code {
+  font: .875em var(--mono); background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: 4px; padding: .1em .35em;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem; overflow-x: auto; margin: 1rem 0;
+}
+pre code { background: none; border: none; padding: 0; font-size: .85rem; line-height: 1.6; }
+.note {
+  background: var(--warn-bg); border: 1px solid var(--warn-border);
+  color: var(--warn-text); border-radius: 8px; padding: .9rem 1.1rem; margin: 1.25rem 0;
+}
+.note strong { color: inherit; }
+.tablewrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface); font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.lead {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 6px;
+  padding: 1rem 1.25rem; margin: 1.5rem 0;
+}
+footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .9rem; }
+ul { padding-left: 1.25rem; }
+li { margin: .35rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>consensus.rodmena.co.uk</h1>
+  <p class="sub">Strongly-consistent distributed key-value store for Rodmena services.</p>
+  <div class="pills">
+    <span class="pill">etcd 3.5.17</span>
+    <span class="pill">3-member Raft quorum</span>
+    <span class="pill">linearizable</span>
+    <span class="pill">gRPC + HTTP/JSON</span>
+    <span class="pill">auth required</span>
+  </div>
+</header>
+
+<div class="lead">
+  <p style="margin-top:0"><strong>What it is for.</strong> Coordination: leader election, distributed
+  locks, service discovery, feature flags, live configuration — anything where
+  several processes must agree and the answer must be correct rather than fast.</p>
+  <p style="margin-bottom:0"><strong>What it is not.</strong> A general-purpose database, a cache, a
+  queue, or a blob store. Values are small, the whole keyspace lives in memory,
+  and every write costs a quorum round trip.</p>
+</div>
+
+<p>Everything on this page was verified against the live service through its
+public HTTPS interface. The machine-readable version is at
+<a href="/llms.txt">/llms.txt</a>.</p>
+
+<h2>Two ways in</h2>
+<div class="tablewrap">
+<table>
+  <tr><th>Interface</th><th>Endpoint</th><th>Use when</th></tr>
+  <tr>
+    <td><strong>gRPC</strong><br>native etcd protocol</td>
+    <td><code>consensus.rodmena.co.uk:443</code></td>
+    <td>You have a real etcd client — <code>etcdctl</code>, Go, Java, Rust.
+        Best performance and native streaming.</td>
+  </tr>
+  <tr>
+    <td><strong>HTTP/JSON</strong><br>etcd gRPC-gateway</td>
+    <td><code>https://consensus.rodmena.co.uk/v3/…</code></td>
+    <td>You want plain HTTPS from any language, no SDK.</td>
+  </tr>
+</table>
+</div>
+<p>Both reach the same cluster and the same data. TLS is an ordinary
+publicly-trusted certificate — no custom CA, no client certificates.</p>
+
+<h2>Authentication</h2>
+<p>Exchange credentials for a token, then send that token on every request.</p>
+<pre><code>TOKEN=$(curl -s -X POST https://consensus.rodmena.co.uk/v3/auth/authenticate \
+  -d '{"name":"YOUR_USER","password":"YOUR_PASSWORD"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')</code></pre>
+
+<div class="note">
+  <strong>No <code>Bearer</code> prefix.</strong> Send the raw token:
+  <code>Authorization: $TOKEN</code>. Adding <code>Bearer </code> returns
+  <code>{"error":"etcdserver: invalid auth token"}</code>. This is the single most
+  common integration mistake.
+</div>
+
+<p>Tokens are <strong>JWTs with a 30 minute TTL</strong>, signed by the cluster.
+Treat HTTP <code>401</code> or <code>invalid auth token</code> as
+&ldquo;re-authenticate once and retry&rdquo;, not as fatal — a long-lived process
+that authenticates only at startup will start failing after 30 minutes. An
+unauthenticated request fails with
+<code>{"error":"etcdserver: user name is empty"}</code>.</p>
+
+<div class="note">
+  <strong>A cluster restart does not log you out.</strong> Tokens are signed, so
+  any member can verify one — they are not held in the memory of whichever
+  member issued them. This was verified by restarting all three members while
+  holding a single token. Rolling upgrades are therefore invisible to
+  applications.
+</div>
+
+<h2>Two encoding rules that will bite you</h2>
+
+<h3>1. Keys and values are base64</h3>
+<p>In the HTTP/JSON API every key and value is base64-encoded, in requests
+<em>and</em> responses — etcd stores arbitrary bytes and JSON cannot carry
+bytes. Forget it and you will successfully store a key literally named
+<code>L215YXBwL2tleQ==</code>. gRPC clients are unaffected.</p>
+
+<h3>2. Every integer is a string</h3>
+<p>All 64-bit fields are rendered as JSON strings, because JSON numbers cannot
+hold int64 safely:</p>
+<pre><code>{"header":{"revision":"13","raft_term":"2"},"count":"1",
+ "kvs":[{"create_revision":"3","mod_revision":"3","version":"1"}]}</code></pre>
+<p>Cast explicitly. <code>"13" &gt; "9"</code> is <code>false</code> as a string
+comparison, and lease IDs overflow a JavaScript number — keep them as strings.</p>
+
+<h2>Key-value operations</h2>
+<p>Examples use <code>b64() { printf "%s" "$1" | base64 -w0; }</code>.</p>
+
+<h3>Put</h3>
+<pre><code>curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/put \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\",\"value\":\"$(b64 30s)\"}"</code></pre>
+
+<h3>Get</h3>
+<pre><code>curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/range \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\"}"</code></pre>
+<div class="note">
+  A miss returns <strong>no <code>kvs</code> array and no <code>count</code> field
+  at all</strong> — not an empty list, not <code>count: 0</code>. Always use
+  <code>response.get("kvs", [])</code>.
+</div>
+
+<h3>List a prefix</h3>
+<p>There is no prefix flag. Pass <code>range_end</code> = the prefix with its last
+byte incremented. For <code>/myapp/</code> that is <code>/myapp0</code>.</p>
+<pre><code>curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/range \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/)\",\"range_end\":\"$(b64 /myapp0)\"}"</code></pre>
+
+<h3>Delete</h3>
+<pre><code>curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/deleterange \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/config/timeout)\"}"</code></pre>
+
+<h2>Transactions — the reason you are here</h2>
+<p>A transaction is <code>compare</code> → <code>success</code> or
+<code>failure</code>, applied atomically across the cluster. This is the
+compare-and-swap primitive that makes locks and leader election possible.</p>
+<p>Create a key only if nobody else has (<code>version = 0</code> means
+&ldquo;does not exist&rdquo;):</p>
+<pre><code>curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/txn \
+  -H "Authorization: $TOKEN" \
+  -d "{
+    \"compare\":[{\"key\":\"$(b64 /myapp/leader)\",\"target\":\"VERSION\",
+                  \"result\":\"EQUAL\",\"version\":\"0\"}],
+    \"success\":[{\"requestPut\":{\"key\":\"$(b64 /myapp/leader)\",
+                                  \"value\":\"$(b64 node-a)\"}}],
+    \"failure\":[]
+  }"</code></pre>
+
+<div class="note">
+  <strong>On failure, <code>succeeded</code> is omitted entirely</strong> rather
+  than being <code>false</code>. Test with
+  <code>resp.get("succeeded") is True</code>. Reading
+  <code>resp["succeeded"]</code> raises on exactly the branch you care about.
+</div>
+
+<p>Compare targets: <code>VERSION</code>, <code>CREATE</code>,
+<code>MOD</code>, <code>VALUE</code>. Comparing on <code>MOD</code> gives you
+optimistic concurrency — read a key, note its <code>mod_revision</code>, write
+only if it has not changed.</p>
+
+<h2>Leases — keys that expire on their own</h2>
+<p>A lease is a TTL handle; keys attached to it vanish when it lapses. This is
+how you get liveness without cleanup code: if your process dies, its
+registration disappears by itself.</p>
+<pre><code># grant a 10 second lease
+LID=$(curl -s -X POST https://consensus.rodmena.co.uk/v3/lease/grant \
+  -H "Authorization: $TOKEN" -d '{"TTL":10}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["ID"])')
+
+# attach a key to it
+curl -s -X POST https://consensus.rodmena.co.uk/v3/kv/put \
+  -H "Authorization: $TOKEN" \
+  -d "{\"key\":\"$(b64 /myapp/nodes/node-a)\",\"value\":\"$(b64 10.0.0.5:8080)\",\"lease\":\"$LID\"}"
+
+# hold it open -- send at roughly TTL/3
+curl -s -X POST https://consensus.rodmena.co.uk/v3/lease/keepalive \
+  -H "Authorization: $TOKEN" -d "{\"ID\":\"$LID\"}"</code></pre>
+<p>Verified: the key persists while keepalives continue and disappears within a
+few seconds of them stopping.</p>
+
+<h2>Watch — react to changes</h2>
+<p>Watch is a long-lived streaming response, one JSON object per line.</p>
+<pre><code>curl -sN -X POST https://consensus.rodmena.co.uk/v3/watch \
+  -H "Authorization: $TOKEN" \
+  -d "{\"create_request\":{\"key\":\"$(b64 /myapp/config/)\",
+                           \"range_end\":\"$(b64 /myapp/config0)\"}}"</code></pre>
+<p>The first object confirms creation; later objects carry <code>events</code>.
+Each event has a <code>type</code> (absent means <code>PUT</code>) and a
+<code>kv</code>. Use <code>curl -N</code> so nothing is buffered.</p>
+<p>After a reconnect, pass <code>start_revision</code> — your last processed
+revision plus one — so you miss nothing. Without it there is a gap.</p>
+
+<h2>Python, without an etcd SDK</h2>
+<p>This client is run against the live service as part of the deployment's test
+suite, so it is known to work as written.</p>
+<pre><code>import base64, httpx
+
+BASE = "https://consensus.rodmena.co.uk"
+
+def b64(s: str) -> str:  return base64.b64encode(s.encode()).decode()
+def unb64(s: str) -> str: return base64.b64decode(s).decode()
+
+class Consensus:
+    def __init__(self, user: str, password: str):
+        self.c = httpx.Client(base_url=BASE, timeout=10.0)
+        self.token = self.c.post(
+            "/v3/auth/authenticate", json={"name": user, "password": password}
+        ).json()["token"]
+        self.c.headers["Authorization"] = self.token   # no "Bearer"
+
+    def put(self, key: str, value: str) -> int:
+        r = self.c.post("/v3/kv/put", json={"key": b64(key), "value": b64(value)})
+        r.raise_for_status()
+        return int(r.json()["header"]["revision"])
+
+    def get(self, key: str) -> str | None:
+        r = self.c.post("/v3/kv/range", json={"key": b64(key)})
+        r.raise_for_status()
+        kvs = r.json().get("kvs", [])        # absent on a miss, not an empty list
+        return unb64(kvs[0]["value"]) if kvs else None
+
+    def list_prefix(self, prefix: str) -> dict[str, str]:
+        end = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        r = self.c.post("/v3/kv/range",
+                        json={"key": b64(prefix), "range_end": b64(end)})
+        r.raise_for_status()
+        return {unb64(kv["key"]): unb64(kv["value"])
+                for kv in r.json().get("kvs", [])}
+
+    def create_if_absent(self, key: str, value: str) -> bool:
+        """Atomic create. True if we won the race, False if it already existed."""
+        r = self.c.post("/v3/kv/txn", json={
+            "compare": [{"key": b64(key), "target": "VERSION",
+                         "result": "EQUAL", "version": "0"}],
+            "success": [{"requestPut": {"key": b64(key), "value": b64(value)}}],
+            "failure": [],
+        })
+        r.raise_for_status()
+        return r.json().get("succeeded") is True   # absent means False</code></pre>
+
+<h2>Go — native gRPC client</h2>
+<pre><code>import (
+    "context"
+    "crypto/tls"
+    "time"
+    clientv3 "go.etcd.io/etcd/client/v3"
+)
+
+cli, _ := clientv3.New(clientv3.Config{
+    Endpoints:   []string{"consensus.rodmena.co.uk:443"},
+    DialTimeout: 5 * time.Second,
+    Username:    "YOUR_USER",
+    Password:    "YOUR_PASSWORD",
+    TLS:         &amp;tls.Config{},   // zero value uses the system roots
+})
+defer cli.Close()
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+_, err := cli.Put(ctx, "/myapp/config/timeout", "30s")
+cancel()</code></pre>
+
+<h2>etcdctl</h2>
+<pre><code>etcdctl --endpoints=https://consensus.rodmena.co.uk:443 \
+        --user USER:PASSWORD get --prefix /myapp/</code></pre>
+
+<h2>Consistency</h2>
+<ul>
+  <li><strong>Reads are linearizable by default</strong> — a read reflects every
+      write that completed before it started. This costs a quorum round trip.</li>
+  <li>Add <code>"serializable": true</code> to a range request for a fast local
+      read that may be stale.</li>
+  <li><strong>Writes are always linearizable</strong> and durable on a majority
+      of members before they are acknowledged.</li>
+  <li><code>revision</code> is a global logical clock over the whole keyspace, so
+      it orders writes to unrelated keys against each other.</li>
+</ul>
+
+<h2>Limits</h2>
+<div class="tablewrap">
+<table>
+  <tr><th>Limit</th><th>Value</th><th>Past it</th></tr>
+  <tr><td>Request body</td><td>1.5 MB</td><td>Rejected</td></tr>
+  <tr><td>General API rate</td><td>100 req/s per IP, burst 200</td><td>HTTP 503</td></tr>
+  <tr><td>Authenticate rate</td><td>10 req/s per IP, burst 20</td><td>HTTP 503</td></tr>
+  <tr><td>Stream lifetime</td><td>1 hour</td><td>Closed; reconnect with <code>start_revision</code></td></tr>
+  <tr><td>History retention</td><td>compacted hourly</td><td>Watch from an older revision fails</td></tr>
+</table>
+</div>
+
+<h2>Blocked at the edge</h2>
+<p>These return <code>403</code> even with valid admin credentials. They are
+operator actions performed on the host, not over the internet.</p>
+<pre><code>/v3/maintenance/snapshot        /v3/cluster/member/add
+/v3/maintenance/defragment      /v3/cluster/member/remove
+/v3/maintenance/downgrade       /v3/cluster/member/update
+/v3/maintenance/alarm           /v3/cluster/member/promote
+/v3/maintenance/transfer-leadership
+/v3/auth/disable</code></pre>
+<p>The equivalent gRPC methods are blocked too. A full-database snapshot over the
+public internet is total data exfiltration in one request, so it is refused
+regardless of who asks.</p>
+
+<h2>Health</h2>
+<pre><code>curl -s https://consensus.rodmena.co.uk/health
+# {"health":"true","reason":""}</code></pre>
+<p>Unauthenticated and safe to poll from a load balancer.</p>
+
+<h2>What this deployment does and does not survive</h2>
+<div class="note">
+  <strong>All three members run on a single host.</strong> The cluster tolerates
+  losing any one member — restart, upgrade, crash — and keeps serving reads and
+  writes. It does <strong>not</strong> survive loss of that host. Treat it as a
+  strongly-consistent coordination service with single-host availability, not a
+  geo-redundant system, and keep a backup elsewhere for anything whose loss you
+  could not tolerate.
+</div>
+
+<h2>Getting access</h2>
+<p>Credentials are issued per application by the operator. Ask
+<a href="mailto:farshid@rodmena.co.uk">farshid@rodmena.co.uk</a> for a user
+scoped to your prefix. Use one credential per service — a prefix-scoped user
+means a leak is contained to that prefix. Namespace your keys as
+<code>/yourapp/…</code> from day one so that stays possible.</p>
+
+<footer>
+  <p>Machine-readable guide: <a href="/llms.txt">/llms.txt</a> ·
+     Upstream reference: <a href="https://etcd.io/docs/v3.5/learning/api/">etcd v3 API</a></p>
+</footer>
+
+</div>
+</body>
+</html>

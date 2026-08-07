@@ -1,0 +1,127 @@
+# etcd cluster backing https://consensus.rodmena.co.uk
+#
+# Three members form a real Raft quorum, so the service survives losing any one
+# member (restart, upgrade, crash). All three run on ONE host, so it does NOT
+# survive loss of that host -- this is stated plainly in the public docs rather
+# than papered over.
+#
+# Client ports are published to 127.0.0.1 only. The public edge is nginx, which
+# terminates TLS and is the sole route in. Peer traffic never leaves the Docker
+# network.
+
+name: consensus
+
+services:
+  etcd1: &etcd
+    image: quay.io/coreos/etcd:v3.5.17
+    container_name: consensus-etcd1
+    restart: unless-stopped
+    networks: [consensus]
+    ports:
+      - "127.0.0.1:2379:2379"
+    volumes:
+      - etcd1-data:/etcd-data
+      - /etc/consensus/jwt:/jwt:ro
+    command: &cmd >
+      etcd
+      --name etcd1
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd1:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd1:2380
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token consensus-rodmena
+      --initial-cluster-state new
+      --auto-compaction-mode periodic
+      --auto-compaction-retention 1h
+      --quota-backend-bytes 8589934592
+      --max-request-bytes 1572864
+      --snapshot-count 10000
+      --heartbeat-interval 100
+      --election-timeout 1000
+      --auth-token jwt,pub-key=/jwt/jwt-key.pub,priv-key=/jwt/jwt-key.pem,sign-method=RS256,ttl=30m
+      --enable-v2=false
+      --logger zap
+      --log-level info
+    healthcheck: &hc
+      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  etcd2:
+    <<: *etcd
+    container_name: consensus-etcd2
+    ports:
+      - "127.0.0.1:2479:2379"
+    volumes:
+      - etcd2-data:/etcd-data
+      - /etc/consensus/jwt:/jwt:ro
+    command: >
+      etcd
+      --name etcd2
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd2:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd2:2380
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token consensus-rodmena
+      --initial-cluster-state new
+      --auto-compaction-mode periodic
+      --auto-compaction-retention 1h
+      --quota-backend-bytes 8589934592
+      --max-request-bytes 1572864
+      --snapshot-count 10000
+      --heartbeat-interval 100
+      --election-timeout 1000
+      --auth-token jwt,pub-key=/jwt/jwt-key.pub,priv-key=/jwt/jwt-key.pem,sign-method=RS256,ttl=30m
+      --enable-v2=false
+      --logger zap
+      --log-level info
+
+  etcd3:
+    <<: *etcd
+    container_name: consensus-etcd3
+    ports:
+      - "127.0.0.1:2579:2379"
+    volumes:
+      - etcd3-data:/etcd-data
+      - /etc/consensus/jwt:/jwt:ro
+    command: >
+      etcd
+      --name etcd3
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd3:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd3:2380
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token consensus-rodmena
+      --initial-cluster-state new
+      --auto-compaction-mode periodic
+      --auto-compaction-retention 1h
+      --quota-backend-bytes 8589934592
+      --max-request-bytes 1572864
+      --snapshot-count 10000
+      --heartbeat-interval 100
+      --election-timeout 1000
+      --auth-token jwt,pub-key=/jwt/jwt-key.pub,priv-key=/jwt/jwt-key.pem,sign-method=RS256,ttl=30m
+      --enable-v2=false
+      --logger zap
+      --log-level info
+
+networks:
+  consensus:
+    name: consensus
+
+volumes:
+  etcd1-data:
+  etcd2-data:
+  etcd3-data:
