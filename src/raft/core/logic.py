@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 
 from raft.rpc.proto import raft_pb2
-from raft.storage import LogEntryRecord
-from raft.util import get_logger
+from raft.storage import LogEntryRecord, SnapshotMetadata, sm_restore
+from raft.util import get_logger, monotonic_ms
 
 from .state import RaftState, Role
 
@@ -25,9 +25,9 @@ class RaftCore:
         if req.term > self.state.current_term:
             self.state.become_follower(req.term)
 
-        up_to_date = (req.last_log_term > self.state.last_log_index_term()[1]) or (
-            req.last_log_term == self.state.last_log_index_term()[1]
-            and req.last_log_index >= self.state.last_log_index_term()[0]
+        last_index, last_term = self.state.last_log_index_term()
+        up_to_date = (req.last_log_term > last_term) or (
+            req.last_log_term == last_term and req.last_log_index >= last_index
         )
 
         if (self.state.voted_for in (None, req.candidate_id)) and up_to_date:
@@ -59,11 +59,15 @@ class RaftCore:
             )
 
         if prev_index > 0:
-            entries = self.state.read_entries(prev_index, prev_index + 1)
-            if not entries or entries[0].term != prev_term:
-                return raft_pb2.AppendEntriesResponse(
-                    term=self.state.current_term, success=False, match_index=prev_index - 1
-                )
+            base_index, base_term = self.state.storage.compaction_base()
+            if prev_index == base_index and prev_term == base_term:
+                pass  # prev points at the compacted snapshot base
+            else:
+                entries = self.state.read_entries(prev_index, prev_index + 1)
+                if not entries or entries[0].term != prev_term:
+                    return raft_pb2.AppendEntriesResponse(
+                        term=self.state.current_term, success=False, match_index=prev_index - 1
+                    )
 
         # append new entries, overwriting conflicts
         if req.entries:
@@ -91,19 +95,20 @@ class RaftCore:
             return raft_pb2.InstallSnapshotResponse(term=self.state.current_term, accepted=False)
 
         self.state.become_follower(req.term, leader_hint=req.leader_id)
-        # For simplicity, directly store snapshot and reset log
-        from raft.storage import SnapshotMetadata
-
         meta = SnapshotMetadata(
             last_included_index=req.last_included_index, last_included_term=req.last_included_term
         )
         self.state.snapshots.store_snapshot(meta, req.data)
-        self.state.truncate_suffix(req.last_included_index)
-        self.state.commit_index = max(self.state.commit_index, req.last_included_index)
-        self.state.apply_entries()
+        sm_restore(self.state.sm, req.data)
+        self.state.storage.compact_prefix(meta.last_included_index, meta.last_included_term)
+        self.state.commit_index = max(self.state.commit_index, meta.last_included_index)
+        self.state.last_applied = max(self.state.last_applied, meta.last_included_index)
+        self.state.persist_metadata()
         return raft_pb2.InstallSnapshotResponse(term=self.state.current_term, accepted=True)
 
     async def maybe_start_election(self) -> None:
+        if self.state.role == Role.LEADER:
+            return
         if monotonic_ms() < self.state.election_deadline_ms:
             return
         self.state.become_candidate()
@@ -131,6 +136,8 @@ class RaftCore:
                 return False
 
         results = await asyncio.gather(*(ask_peer(p) for p in self.state.peers))
+        if self.state.role != Role.CANDIDATE:
+            return
         votes += sum(1 for r in results if r)
         if votes >= needed:
             self.state.become_leader()
@@ -148,17 +155,23 @@ class RaftCore:
         self.heartbeat_task = asyncio.create_task(loop())
 
     async def broadcast_append_entries(self) -> None:
-        last_index, last_term = self.state.last_log_index_term()
-
         async def send(peer: str) -> None:
             progress = self.state.progress[peer]
+            first_index = self.state.storage.first_index()
+            if progress.next_index < first_index:
+                await self.send_snapshot(peer)
+                return
             prev_index = progress.next_index - 1
             entries = self.state.read_entries(progress.next_index)
             prev_term = 0
             if prev_index > 0:
-                prev_entries = self.state.read_entries(prev_index, prev_index + 1)
-                if prev_entries:
-                    prev_term = prev_entries[0].term
+                base_index, base_term = self.state.storage.compaction_base()
+                if prev_index == base_index:
+                    prev_term = base_term
+                else:
+                    prev_entries = self.state.read_entries(prev_index, prev_index + 1)
+                    if prev_entries:
+                        prev_term = prev_entries[0].term
             req = raft_pb2.AppendEntriesRequest(
                 term=self.state.current_term,
                 leader_id=self.state.node_id,
@@ -184,21 +197,54 @@ class RaftCore:
                         progress.next_index = progress.match_index + 1
                     await self.maybe_advance_commit_index()
                 else:
-                    progress.next_index = max(1, progress.next_index - 1)
+                    progress.next_index = max(1, resp.match_index + 1)
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("append to %s failed: %s", peer, e)
 
         await asyncio.gather(*(send(p) for p in self.state.peers))
+
+    async def send_snapshot(self, peer: str) -> None:
+        progress = self.state.progress[peer]
+        snap = self.state.snapshots.load_snapshot()
+        if snap is None:
+            progress.next_index = self.state.storage.first_index()
+            return
+        meta, data = snap
+        req = raft_pb2.InstallSnapshotRequest(
+            term=self.state.current_term,
+            leader_id=self.state.node_id,
+            last_included_index=meta.last_included_index,
+            last_included_term=meta.last_included_term,
+            data=data,
+        )
+        try:
+            async with self.rpc_client_factory(peer) as client:
+                resp = await client.InstallSnapshot(req)
+            if resp.term > self.state.current_term:
+                self.state.become_follower(resp.term)
+                return
+            if resp.accepted:
+                progress.match_index = meta.last_included_index
+                progress.next_index = meta.last_included_index + 1
+                await self.maybe_advance_commit_index()
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("snapshot to %s failed: %s", peer, e)
 
     async def maybe_advance_commit_index(self) -> None:
         match_indexes = [self.state.progress[p].match_index for p in self.state.peers]
         match_indexes.append(self.state.last_log_index_term()[0])
         match_indexes.sort()
         majority_match = match_indexes[len(match_indexes) // 2]
-        _, term_at_idx = self.state.last_log_index_term()
-        if majority_match > self.state.commit_index and term_at_idx == self.state.current_term:
-            self.state.commit_index = majority_match
-            self.state.apply_entries()
+        if majority_match <= self.state.commit_index:
+            return
+        # Raft safety: only commit entries from the leader's current term; an
+        # entry replicated to a majority from an older term could be overwritten
+        # by a later leader (Figure 8 of the paper).
+        entries = self.state.read_entries(majority_match, majority_match + 1)
+        if not entries or entries[0].term != self.state.current_term:
+            return
+        self.state.commit_index = majority_match
+        self.state.apply_entries()
 
     async def client_write(self, data: bytes) -> tuple[bool, int, int]:
         if self.state.role != Role.LEADER:
@@ -207,4 +253,5 @@ class RaftCore:
         entry = LogEntryRecord(index=last_index + 1, term=self.state.current_term, data=data)
         self.state.append_log_entries([entry])
         await self.broadcast_append_entries()
+        await self.maybe_advance_commit_index()
         return True, entry.index, entry.term

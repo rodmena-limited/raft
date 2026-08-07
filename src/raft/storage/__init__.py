@@ -6,6 +6,8 @@ from .interfaces import (
     SnapshotMetadata,
     SnapshotStore,
     StateMachine,
+    sm_restore,
+    sm_snapshot,
 )
 
 __all__ = [
@@ -17,4 +19,6 @@ __all__ = [
     "StateMachine",
     "FsLogStorage",
     "FsSnapshotStore",
+    "sm_restore",
+    "sm_snapshot",
 ]

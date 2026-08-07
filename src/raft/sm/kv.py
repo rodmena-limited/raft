@@ -19,3 +19,9 @@ class KeyValueStateMachine(StateMachine):
             _, key = op
             return self.store.get(key)
         raise ValueError("unknown op")
+
+    def snapshot(self) -> bytes:
+        return pickle.dumps(self.store)
+
+    def restore(self, data: bytes) -> None:
+        self.store = pickle.loads(data)

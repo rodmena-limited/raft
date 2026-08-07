@@ -44,10 +44,37 @@ class LogStorage(abc.ABC):
     def truncate_suffix(self, index: int) -> None: ...
 
     @abc.abstractmethod
+    def compact_prefix(self, index: int, term: int) -> None:
+        """Drop all entries with index <= ``index`` and record the compaction
+        base ``(index, term)``. Used when a snapshot covers those entries."""
+
+    @abc.abstractmethod
+    def compaction_base(self) -> tuple[int, int]:
+        """Return (base_index, base_term): the snapshot-covered prefix of the
+        log that has been compacted away. (0, 0) when nothing was compacted."""
+
+    @abc.abstractmethod
     def last_index_term(self) -> tuple[int, int]: ...
 
     @abc.abstractmethod
     def first_index(self) -> int: ...
+
+
+def sm_snapshot(state_machine: object) -> bytes | None:
+    """Return the state machine's own snapshot blob, or None if the state
+    machine does not support self-snapshotting."""
+    fn = getattr(state_machine, "snapshot", None)
+    return fn() if callable(fn) else None
+
+
+def sm_restore(state_machine: object, data: bytes) -> bool:
+    """Restore a state machine from a snapshot blob. Returns True when the
+    state machine implements restore, False otherwise."""
+    fn = getattr(state_machine, "restore", None)
+    if callable(fn):
+        fn(data)
+        return True
+    return False
 
 
 class SnapshotStore(abc.ABC):

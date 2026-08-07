@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -20,8 +20,8 @@ class Snapshotting:
 class RaftConfig:
     node_id: str
     peers: list[str]
-    timeouts: Timeouts = Timeouts()
-    snapshotting: Snapshotting = Snapshotting()
+    timeouts: Timeouts = field(default_factory=Timeouts)
+    snapshotting: Snapshotting = field(default_factory=Snapshotting)
 
 
 DEFAULT_CONFIG = RaftConfig(node_id="", peers=[])

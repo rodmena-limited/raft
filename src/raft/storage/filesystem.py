@@ -18,17 +18,20 @@ class FsLogStorage(LogStorage):
         if not self.meta_path.exists():
             self.store_metadata(LogMetadata(term=0, voted_for=None, commit_index=0, last_applied=0))
         if not self.log_path.exists():
-            self._write_log([])
+            self._write_log({"base_index": 0, "base_term": 0, "entries": []})
 
-    def _read_log(self) -> list[LogEntryRecord]:
+    def _read_log(self) -> dict:
         with self.log_path.open("rb") as f:
             return pickle.load(f)
 
-    def _write_log(self, entries: list[LogEntryRecord]) -> None:
+    def _write_log(self, state: dict) -> None:
         with self.log_path.open("wb") as f:
-            pickle.dump(entries, f)
+            pickle.dump(state, f)
             f.flush()
             os.fsync(f.fileno())
+
+    def _entries(self) -> list[LogEntryRecord]:
+        return self._read_log()["entries"]
 
     def load_metadata(self) -> LogMetadata:
         with self.meta_path.open("rb") as f:
@@ -41,31 +44,46 @@ class FsLogStorage(LogStorage):
             os.fsync(f.fileno())
 
     def append_entries(self, entries: Iterable[LogEntryRecord]) -> None:
-        current = self._read_log()
-        current.extend(entries)
-        self._write_log(current)
+        state = self._read_log()
+        state["entries"].extend(entries)
+        self._write_log(state)
 
     def read_entries(self, start: int, end: int | None = None) -> list[LogEntryRecord]:
-        log = self._read_log()
+        log = self._entries()
         if end is None:
             return [e for e in log if e.index >= start]
         return [e for e in log if start <= e.index < end]
 
     def truncate_suffix(self, index: int) -> None:
-        log = self._read_log()
-        truncated = [e for e in log if e.index <= index]
-        self._write_log(truncated)
+        state = self._read_log()
+        state["entries"] = [e for e in state["entries"] if e.index <= index]
+        self._write_log(state)
+
+    def compact_prefix(self, index: int, term: int) -> None:
+        state = self._read_log()
+        if index < state["base_index"]:
+            return
+        state["entries"] = [e for e in state["entries"] if e.index > index]
+        state["base_index"] = index
+        state["base_term"] = term
+        self._write_log(state)
+
+    def compaction_base(self) -> tuple[int, int]:
+        state = self._read_log()
+        return state["base_index"], state["base_term"]
 
     def last_index_term(self) -> tuple[int, int]:
-        log = self._read_log()
-        if not log:
-            return 0, 0
-        last = log[-1]
-        return last.index, last.term
+        state = self._read_log()
+        if state["entries"]:
+            last = state["entries"][-1]
+            return last.index, last.term
+        return state["base_index"], state["base_term"]
 
     def first_index(self) -> int:
-        log = self._read_log()
-        return log[0].index if log else 0
+        state = self._read_log()
+        if state["entries"]:
+            return state["entries"][0].index
+        return state["base_index"] + 1
 
 
 class FsSnapshotStore(SnapshotStore):

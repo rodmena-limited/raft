@@ -70,12 +70,13 @@ class RaftNode:
         self.core = RaftCore(self.state, client_factory)
         self.server = grpc.aio.server(options=[("grpc.so_reuseport", 0)])
         raft_pb2_grpc.add_RaftServicer_to_server(RaftServicer(self.core), self.server)
-        self.server.add_insecure_port(bind)
+        self.port = self.server.add_insecure_port(bind)
+        self._election_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         await self.server.start()
-        self.logger.info("node started on %s", self.bind)
-        asyncio.create_task(self._run_election_timer())
+        self.logger.info("node started on %s:%s", self.bind, self.port)
+        self._election_task = asyncio.create_task(self._run_election_timer())
 
     async def _run_election_timer(self) -> None:
         while True:
@@ -86,4 +87,6 @@ class RaftNode:
         await self.server.stop(grace=None)
         if self.core.heartbeat_task:
             self.core.heartbeat_task.cancel()
+        if self._election_task:
+            self._election_task.cancel()
         self.logger.info("node stopped")
