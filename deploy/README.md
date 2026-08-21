@@ -1,7 +1,16 @@
 # consensus.rodmena.co.uk — deployment
 
-The consensus service is a **3-member etcd 3.5.17 cluster** behind an nginx TLS
-edge on this host.
+The consensus service is a **3-member etcd 3.5.28 cluster distributed across
+three datacentres**, behind an nginx TLS edge on vm-2.
+
+| member | host | site |
+|---|---|---|
+| `etcd-vm2`   | vm-2 / bikeroom (93.89.141.253)  | London |
+| `etcd-nano2` | pg-nano-02 (51.91.248.208)       | Gravelines, FR |
+| `etcd-nano4` | pg-nano-04 (57.131.136.207)      | Limburg, DE |
+
+Quorum is 2, so the cluster survives losing any one member **including its
+entire site**. Operations: see `RUNBOOK.md`.
 
 ## Why etcd and not the raft-py library in this repo
 
@@ -121,7 +130,7 @@ audit:
 
 ## Known limitations
 
-**All three members run on one host.** The cluster tolerates losing any single
+**Members are in three separate datacentres** (rebuilt 2026-08-21, ticket #2).
 member and keeps serving reads and writes; it does not survive loss of the host.
 This is stated plainly in the public docs rather than implied away. Making it
 host-redundant means moving members onto separate machines and re-pointing

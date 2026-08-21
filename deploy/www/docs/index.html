@@ -113,7 +113,7 @@ li { margin: .35rem 0; }
   <h1>consensus.rodmena.co.uk</h1>
   <p class="sub">Strongly-consistent distributed key-value store for Rodmena services.</p>
   <div class="pills">
-    <span class="pill">etcd 3.5.17</span>
+    <span class="pill">etcd 3.5.28</span>
     <span class="pill">3-member Raft quorum</span>
     <span class="pill">linearizable</span>
     <span class="pill">gRPC + HTTP/JSON</span>
@@ -405,7 +405,7 @@ regardless of who asks.</p>
 
 <h2>What this deployment does and does not survive</h2>
 <div class="note">
-  <strong>All three members run on a single host.</strong> The cluster tolerates
+  <strong>Members run in three separate datacentres (London, Gravelines, Limburg), so the cluster survives the loss of any one member including its entire site.</strong> The cluster tolerates
   losing any one member — restart, upgrade, crash — and keeps serving reads and
   writes. It does <strong>not</strong> survive loss of that host. Treat it as a
   strongly-consistent coordination service with single-host availability, not a

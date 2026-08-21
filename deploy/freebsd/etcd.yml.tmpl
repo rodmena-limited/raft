@@ -1,0 +1,73 @@
+# etcd member config -- rendered per host by deploy-member.sh
+#
+# PEER URLS USE IP ADDRESSES, NOT DNS. Consensus must not acquire a DNS
+# dependency: if resolution fails the cluster must still form. The certificates
+# carry both the IP and the hostname as SANs, so either would validate.
+name: @@NAME@@
+data-dir: /var/db/etcd
+
+listen-peer-urls: https://@@IP@@:2380
+initial-advertise-peer-urls: https://@@IP@@:2380
+
+# Clients: loopback for the local nginx edge and local etcdctl, plus this host's
+# own address so peers can run admin commands. pf restricts 2379 to member IPs.
+listen-client-urls: https://127.0.0.1:2379,https://@@IP@@:2379
+advertise-client-urls: https://@@IP@@:2379
+
+initial-cluster: etcd-vm2=https://93.89.141.253:2380,etcd-nano2=https://51.91.248.208:2380,etcd-nano4=https://57.131.136.207:2380
+initial-cluster-token: consensus-rodmena-v2
+initial-cluster-state: new
+
+# Measured RTT between members: vm2<->nano2 4.5ms, vm2<->nano4 19ms,
+# nano2<->nano4 10ms. A 100ms heartbeat is >5x the worst case, and the 1000ms
+# election timeout keeps the 10:1 ratio etcd recommends. Left at the values the
+# single-host cluster already used, which are conservative for this spread.
+heartbeat-interval: 100
+election-timeout: 1000
+
+# Carried over from the existing deployment.
+auto-compaction-mode: periodic
+auto-compaction-retention: "1h"
+quota-backend-bytes: 8589934592
+max-request-bytes: 1572864
+snapshot-count: 10000
+enable-v2: false
+
+client-transport-security:
+  cert-file: /usr/local/etc/etcd/pki/member.crt
+  key-file: /usr/local/etc/etcd/pki/member.key
+  # NO trusted-ca-file HERE, deliberately. In etcd, supplying a client
+  # trusted-ca-file IMPLIES client certificate authentication regardless of the
+  # client-cert-auth flag below -- the server then advertises "Acceptable client
+  # certificate CA names" in the handshake and refuses clients without a cert.
+  # That silently defeats client-cert-auth: false and breaks the JSON gateway.
+  # The peer section below keeps its trusted-ca-file: peers MUST be verified.
+  # DELIBERATELY false, and this is a considered decision rather than a relaxation.
+  #
+  # etcd's HTTP/JSON gateway CANNOT accept a client certificate: it refuses with
+  # "CommonName of client sending a request against gateway will be ignored and
+  # not used as expected" (HTTP 400), because it has no way to map a cert CN to
+  # an etcd user for gateway requests. Requiring client certs here would make the
+  # public JSON API -- the entire point of this service -- unusable.
+  #
+  # What protects 2379 instead, in layers:
+  #   1. pf allows 2379 only from 127.0.0.1 and the other two member IPs
+  #   2. nginx is the sole public ingress and blocks operator-only endpoints
+  #   3. etcd RBAC requires a username and password for every operation
+  #   4. traffic is still TLS-encrypted; only CLIENT-cert verification is off
+  #
+  # PEER traffic below keeps client-cert-auth: true. That is not negotiable --
+  # an unauthenticated peer can propose and commit Raft entries.
+  client-cert-auth: false
+
+# Peer mTLS. client-cert-auth here means a peer must present a cert signed by
+# OUR ca -- without it the peer port accepts any TLS client, and a Raft peer can
+# propose and commit entries.
+peer-transport-security:
+  cert-file: /usr/local/etc/etcd/pki/member.crt
+  key-file: /usr/local/etc/etcd/pki/member.key
+  trusted-ca-file: /usr/local/etc/etcd/pki/ca.crt
+  client-cert-auth: true
+
+logger: zap
+log-level: info

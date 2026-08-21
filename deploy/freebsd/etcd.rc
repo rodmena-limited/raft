@@ -1,0 +1,30 @@
+#!/bin/sh
+# PROVIDE: etcd
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# etcd member of the consensus.rodmena.co.uk cluster.
+#
+# Mirrors the ledger/futex rc pattern on this estate: daemon(8) supervises and
+# restarts (-r -R 5), which is the FreeBSD equivalent of Restart=always.
+#
+# Config lives in /usr/local/etc/etcd/etcd.yml so the member identity and peer
+# list are declarative and diffable, rather than a command line nobody can read.
+. /etc/rc.subr
+name="etcd"
+rcvar="etcd_enable"
+load_rc_config $name
+: ${etcd_enable:="NO"}
+: ${etcd_runas:="etcd"}
+: ${etcd_config:="/usr/local/etc/etcd/etcd.yml"}
+pidfile="/var/run/etcd/daemon.pid"
+command="/usr/sbin/daemon"
+command_args="-f -r -R 5 -P ${pidfile} -p /var/run/etcd/child.pid -u ${etcd_runas} \
+    /usr/local/bin/etcd --config-file ${etcd_config}"
+start_precmd="etcd_prestart"
+etcd_prestart() {
+    /bin/mkdir -p /var/run/etcd /var/log/etcd /var/db/etcd
+    /usr/sbin/chown ${etcd_runas}:${etcd_runas} /var/run/etcd /var/log/etcd /var/db/etcd
+    /bin/chmod 700 /var/db/etcd
+}
+run_rc_command "$1"

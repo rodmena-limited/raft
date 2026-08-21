@@ -1,7 +1,7 @@
 # consensus.rodmena.co.uk
 
 > Strongly-consistent distributed key-value store for Rodmena services. It is a
-> 3-member **etcd v3.5.17** cluster behind TLS: linearizable reads and writes,
+> 3-member **etcd v3.5.28** cluster, distributed across three datacentres, behind TLS: linearizable reads and writes,
 > compare-and-swap transactions, TTL leases, and change notification via watch.
 > Use it for coordination — leader election, distributed locks, service
 > discovery, feature flags, live configuration. Do not use it as a general
@@ -12,7 +12,7 @@ public HTTPS interface. Where behaviour is surprising, the surprise is written
 down rather than smoothed over.
 
 - **Base URL:** `https://consensus.rodmena.co.uk`
-- **Engine:** etcd 3.5.17, 3 voting members, Raft quorum of 2
+- **Engine:** etcd 3.5.28, 3 voting members in 3 datacentres (London / Gravelines / Limburg), Raft quorum of 2
 - **Auth:** required for every key operation. No anonymous access.
 - **Credentials:** issued by the operator (farshid@rodmena.co.uk). None are published here.
 
@@ -363,11 +363,24 @@ curl -s https://consensus.rodmena.co.uk/health
 
 ## Operational limits you should know
 
-**All three members run on a single host.** The cluster tolerates losing any one
-member — restart, upgrade, crash — and keeps serving. It does **not** survive
-loss of that host. Treat this as a coordination service with strong consistency
-and single-host availability, not as a geo-redundant system. Do not put data here
-whose loss you could not tolerate without a backup elsewhere.
+**Members are in three separate datacentres** — London (vm-2), Gravelines (FR)
+and Limburg (DE). Quorum is 2, so the cluster tolerates losing any one member,
+its host, or its entire site, and keeps serving reads and writes. This was
+verified on 2026-08-21 by killing the leader outright: the remaining two elected
+a new leader, continued accepting writes, and the recovered member reconciled
+the writes it had missed.
+
+What it still does NOT survive: losing **two** members simultaneously. At one
+surviving member there is no quorum, so the cluster stops accepting writes
+rather than risk divergence — it is unavailable, not corrupted, and recovers
+when a second member returns.
+
+The public edge (nginx) runs on vm-2 only, so an outage of that host takes the
+public endpoint down even while consensus continues among the members. Clients
+needing to ride that out should talk to the member endpoints directly.
+
+Back up anything whose loss you could not tolerate: replication is not backup,
+and a mistaken `DELETE` replicates to all three in milliseconds.
 
 Key naming: use a `/` prefix per application (`/myapp/...`). Users can be scoped
 to a prefix, so a well-namespaced key layout is what makes per-application

@@ -1,0 +1,7 @@
+# NEVER commit private keys. The CA key can mint a certificate for any member,
+# which is a peer credential -- and a Raft peer can propose and commit entries.
+# Keys live on the members at /usr/local/etc/etcd/pki/ and in the encrypted
+# estate bundle (/etc/secrets.enc). Certificates are public and ARE tracked, so
+# the deployment is auditable without exposing anything.
+*.key
+*.srl
