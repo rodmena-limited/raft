@@ -69,5 +69,19 @@ peer-transport-security:
   trusted-ca-file: /usr/local/etc/etcd/pki/ca.crt
   client-cert-auth: true
 
+# RS256 JWT auth tokens, carried over from the pre-distribution deployment.
+#
+# THIS IS LOAD-BEARING IN A DISTRIBUTED CLUSTER AND WAS MISSED ON FIRST DEPLOY.
+# Without it etcd silently falls back to SIMPLE tokens: a random prefix plus a
+# global counter, held in the ISSUING MEMBER'S MEMORY, unsigned, and not
+# verifiable by any other member. On the old single-host cluster that was merely
+# fragile. Across three members behind an nginx failover it is a functional
+# break -- a token minted by one member is rejected the moment a client is
+# routed to another, and every token dies when its issuer restarts.
+#
+# JWTs are signed, so any member verifies any token, and a rolling restart does
+# not log applications out. The published docs promise exactly this.
+auth-token: jwt,pub-key=/usr/local/etc/etcd/jwt/jwt-key.pub,priv-key=/usr/local/etc/etcd/jwt/jwt-key.pem,sign-method=RS256,ttl=30m
+
 logger: zap
 log-level: info

@@ -156,6 +156,31 @@ service etcd start                      # bring it back
 Done 2026-08-21: killed the leader, cluster kept serving reads and writes,
 elected a new leader, and the recovered member reconciled the missed write.
 
+## Auth tokens are JWTs — and this is load-bearing
+
+`auth-token: jwt,...,sign-method=RS256,ttl=30m` in `etcd.yml`, with the keypair
+at `/usr/local/etc/etcd/jwt/`.
+
+**Do not omit it.** etcd silently falls back to *simple* tokens: a random prefix
+plus a global counter, held in the **issuing member's memory**, unsigned, and
+not verifiable by any other member. On a single-host cluster that is merely
+fragile. Across three members behind an nginx failover it is a functional break
+— a token minted by one member is rejected the moment a client is routed to
+another, and every token dies when its issuer restarts.
+
+This regression was introduced on the first distributed deploy (the JWT flags
+were not carried over from the old compose file) and caught by an independent
+tester, not by us. Verify after any config change:
+
+```sh
+# a JWT has THREE dot-separated segments; a simple token has two
+TOK=$(curl -s -X POST https://consensus.rodmena.co.uk/v3/auth/authenticate \
+  -H 'Content-Type: application/json' -d '{"name":"app","password":"..."}' \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+echo "$TOK" | awk -F. '{print NF}'          # must be 3
+# and the discriminating test: mint at one member, USE AT ANOTHER
+```
+
 ## Gotchas that cost time
 
 - `pkg search '^etcd'` returns **`etcd-1.0.1_3` — an ncurses CD player**
@@ -163,6 +188,9 @@ elected a new leader, and the recovered member reconciled the missed write.
 - The FreeBSD package ships **binaries only, no rc.d script**. Ours is in
   `deploy/freebsd/etcd.rc`.
 - Client `trusted-ca-file` silently overrides `client-cert-auth: false` (above).
+- `HEAD /health` returns 405 from etcd — its handler is GET-only. nginx sets
+  `proxy_method GET` on that location so HEAD gets the same status and headers
+  with no body, which is what load balancers and uptime probes require.
 - **Check DNS before believing an API failure.** A stale local resolver cache
   pointed at the OLD cluster produced "invalid user ID or password" while the
   same credential worked via etcdctl. Nothing was wrong with the deployment.
