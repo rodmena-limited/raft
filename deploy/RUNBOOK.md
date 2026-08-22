@@ -318,8 +318,9 @@ uptime-service's refinement, from the companion failure the same night — a
 liveness scan reported a clean "not found" while its control returned 0, because
 the two paths hashed the value differently (one let `cut` append a newline the
 other had stripped). No hash could ever match, so "not found" was structurally
-guaranteed regardless of the truth. A control built alongside the query rather
-than through it proves nothing about the query.
+guaranteed regardless of the truth. In their final form: **a control built ALONGSIDE the
+query validates the fixture, not the query.** It has to flow THROUGH the same
+code path, or it only proves that a similar thing works.
 
 Before escalating anything found by pattern, name, or path, open it. The same
 applies to a grep for `password` in logs, a scan for key-shaped strings, or a
