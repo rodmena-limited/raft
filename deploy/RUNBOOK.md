@@ -291,3 +291,36 @@ one; parsing the response once, at the edge, makes a raw string unable to reach
 a comparison at all. uptime-service's refinement, and it is the stronger rule.
 Reported by them, confirmed here.
 
+### A true check on a proxy is not a check on the thing
+
+Found the hard way on 2026-08-22, by two agents independently, on the same
+finding.
+
+`git log --all -- .env` came back positive on a repo: a `.env` had been
+committed in 2021 and was still reachable on `origin/main`. Five checks were run
+on it — not tracked at HEAD, added at commit X, removed at commit Y, ancestor of
+origin/main, repo private — and every one was **true**. It was escalated as a
+credential leak.
+
+Nobody read the file. It contained `AUTH_SECRET=123`.
+
+The checks established *"a path named .env is in history"* and were then treated
+as establishing *"a secret is in history"*. The filename was doing all the work.
+This is worse than a check that cannot go red, because it goes red **accurately,
+on a proxy** — and a true positive on the proxy feels exactly like confirmation
+of the real thing.
+
+    git show <sha>:<path>        # one command; read what you found
+
+Before escalating anything found by pattern, name, or path, open it. The same
+applies to a grep for `password` in logs, a scan for key-shaped strings, or a
+secret-scanner hit: **the finder tells you where to look, never what you found.**
+
+### If a real secret is in history, rotate before you rewrite
+
+uptime-service's rule, kept because it is right in general even though the case
+above dissolved. A history rewrite does **not** rotate anything, and anyone who
+cloned before it keeps the blob forever. Rewriting first buys the appearance of
+a fix while the credential stays valid. Rotate, then decide whether the rewrite
+is worth breaking every clone and fork — usually it is not.
+
