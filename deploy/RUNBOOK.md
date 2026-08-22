@@ -194,3 +194,56 @@ echo "$TOK" | awk -F. '{print NF}'          # must be 3
 - **Check DNS before believing an API failure.** A stale local resolver cache
   pointed at the OLD cluster produced "invalid user ID or password" while the
   same credential worked via etcdctl. Nothing was wrong with the deployment.
+
+## Issuing a credential to a consuming service
+
+Do **not** hand out the shared `app` user. It holds readwrite over the entire
+keyspace (`[ , <open ended>`), so every service that gets it can read and
+overwrite every other service's keys. Create a named, prefix-scoped user per
+consumer instead.
+
+    . /usr/local/etc/etcd/credentials.env
+    PW=$(openssl rand -base64 30 | tr -d '/+=' | head -c 32)
+    ctl role add <svc>
+    ctl role grant-permission <svc> --prefix=true readwrite /<svc>/
+    ctl user add <svc> --new-user-password="$PW"
+    ctl user grant-role <svc> <svc>
+    printf 'ETCD_<SVC>_PASSWORD=%s\n' "$PW" >> /usr/local/etc/etcd/credentials.env
+
+Then refresh `/etc/secrets.enc` and the gist — the credentials file is inside
+the bundle, and a password that exists only on one member is a password you lose
+with that member.
+
+**Consumers need no client certificate.** The public edge holds
+`etcd-client.crt` and presents it upstream; over `https://consensus.rodmena.co.uk`
+a service needs only its username and password. POST them to
+`/v3/auth/authenticate` and send the returned token in `Authorization` — raw,
+with no `Bearer ` prefix. Tokens are RS256 JWTs with a 30-minute TTL.
+
+### Verifying a new credential
+
+Scope is a claim until you try to break it, and both directions matter. Test
+from **outside** the cluster, over the public edge — a check run on a member
+with the client cert in hand proves nothing about what the consumer can do.
+
+| check | expected |
+|---|---|
+| authenticate | 200, token issued |
+| PUT + GET inside the prefix | 200, value round-trips |
+| PUT `/app/secret`, `/consensus/config`, `/` | 403 |
+| PUT `/<svc>X/...` (boundary, not string-prefix) | 403 |
+| RANGE `/` → `\0` | 403 |
+| any request with no token | 400 |
+| authenticate with a wrong password | 400 |
+
+The first two rows are not decoration. A credential that is simply broken
+returns 403 to everything and would satisfy every refusal row on its own; the
+positive rows are what make the negatives mean "scoped" rather than "dead".
+
+### Issued
+
+| user | prefix | consumer | issued |
+|---|---|---|---|
+| `app` | **whole keyspace** — legacy, do not issue again | shared | 2026-08-21 |
+| `uptime` | `/uptime.systems/` | uptime.systems | 2026-08-22 |
+
