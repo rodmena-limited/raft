@@ -267,6 +267,13 @@ the other's prefix for both read and write, and each 200s on its own.
 Include a DELETE that returns `deleted=1`. A PUT that wrote nothing also returns
 200, and against that, every 403 above proves only that the credential is dead.
 
+uptime-service put the general form better than I did, so in their words: **an
+operation that succeeds without changing anything is indistinguishable from one
+that worked.** A search-and-replace matching nothing, a migration that no-ops, a
+revocation against an empty list, a diagnostic that runs clean and answers a
+different question than the one you asked — all return success. Assert the
+EFFECT, not the return code.
+
 ### Client trap: integers come back as JSON STRINGS
 
 `header.revision`, `mod_revision`, `create_revision`, lease ids and the
@@ -276,6 +283,11 @@ Include a DELETE that returns `deleted=1`. A PUT that wrote nothing also returns
 
 Python raises `TypeError` on `'26' > 5`, which is loud and safe. **A language
 that coerces gets it silently wrong** — in JavaScript `"9" > "26"` is `true`,
-so a revision comparison can go backwards without erroring. Cast before
-comparing. Reported by uptime-service, confirmed here.
+so a revision comparison can go backwards without erroring.
+
+**Cast at the boundary, not at the point of use.** Casting before each
+comparison puts the burden on every call site and fails the moment someone adds
+one; parsing the response once, at the edge, makes a raw string unable to reach
+a comparison at all. uptime-service's refinement, and it is the stronger rule.
+Reported by them, confirmed here.
 
