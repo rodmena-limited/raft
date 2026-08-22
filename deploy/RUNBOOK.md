@@ -312,6 +312,15 @@ of the real thing.
 
     git show <sha>:<path>        # one command; read what you found
 
+And when you add the control that would have caught this: **the control must
+exercise the same code path as the real query, not merely a similar one.**
+uptime-service's refinement, from the companion failure the same night — a
+liveness scan reported a clean "not found" while its control returned 0, because
+the two paths hashed the value differently (one let `cut` append a newline the
+other had stripped). No hash could ever match, so "not found" was structurally
+guaranteed regardless of the truth. A control built alongside the query rather
+than through it proves nothing about the query.
+
 Before escalating anything found by pattern, name, or path, open it. The same
 applies to a grep for `password` in logs, a scan for key-shaped strings, or a
 secret-scanner hit: **the finder tells you where to look, never what you found.**
