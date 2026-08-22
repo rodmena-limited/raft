@@ -246,4 +246,36 @@ positive rows are what make the negatives mean "scoped" rather than "dead".
 |---|---|---|---|
 | `app` | **whole keyspace** — legacy, do not issue again | shared | 2026-08-21 |
 | `uptime` | `/uptime.systems/` | uptime.systems | 2026-08-22 |
+| `uptime-staging` | `/uptime.systems-staging/` | uptime.systems (staging) | 2026-08-22 |
+
+### Separate an environment's prefix, do not nest it
+
+`/svc-staging/` beside `/svc/`, never `/svc/staging/`. Nesting puts staging
+*inside* the production grant, so a staging bug writes production keys and the
+separation buys nothing. Raised by uptime-service, and they were right.
+
+The separation is a byte-range property, so check it rather than trusting the
+names. etcd turns a prefix into `[prefix, prefix_with_last_byte+1)`:
+
+    /uptime.systems/          -> [/uptime.systems/,         /uptime.systems0)
+    /uptime.systems-staging/  -> [/uptime.systems-staging/, /uptime.systems-staging0)
+
+`-` is 0x2D and `/` is 0x2F, so the staging range ends below where production
+starts. Disjoint. Then **prove it in both directions** — each credential 403s on
+the other's prefix for both read and write, and each 200s on its own.
+
+Include a DELETE that returns `deleted=1`. A PUT that wrote nothing also returns
+200, and against that, every 403 above proves only that the credential is dead.
+
+### Client trap: integers come back as JSON STRINGS
+
+`header.revision`, `mod_revision`, `create_revision`, lease ids and the
+`deleted` count are int64, and protobuf-JSON encodes int64 as a **string**:
+
+    r["header"]["revision"]      -> '26'   (str, not int)
+
+Python raises `TypeError` on `'26' > 5`, which is loud and safe. **A language
+that coerces gets it silently wrong** — in JavaScript `"9" > "26"` is `true`,
+so a revision comparison can go backwards without erroring. Cast before
+comparing. Reported by uptime-service, confirmed here.
 
