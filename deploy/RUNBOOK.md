@@ -115,6 +115,18 @@ etcdutl snapshot status /var/backups/etcd-*.db --write-out=table
 **Restore (quorum permanently lost).** Restore is a *cluster rebuild*: every
 member is restored from the same snapshot with a NEW cluster token.
 
+**This procedure is exercised, not assumed.** `deploy/dr-drill.sh` takes no
+arguments, touches no production data and needs no credential: it builds a
+synthetic etcd, snapshots it, and runs the command below *as written here*,
+then starts the result and counts the keys it serves. It also requires the
+restore to REFUSE a corrupted and a truncated snapshot — a drill only ever run
+against a good snapshot is a hypothesis in nicer clothing.
+
+Last run 2026-08-23 on rodmena-vm-2: 11 passed, 0 failed, including a member
+restored by the exact invocation below serving 137/137 keys. **Re-run it after
+any etcd upgrade** — the failure mode it guards against is a documented command
+that stopped working, which reading cannot detect.
+
 ```sh
 service etcd stop                      # on all three
 etcdutl snapshot restore /path/snap.db \
