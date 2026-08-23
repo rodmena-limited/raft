@@ -66,8 +66,50 @@ start_etcd(){   # $1 = data-dir, $2 = name
 stop_etcd(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null; PID=""; }
 
 echo "== etcd DR drill, phase 1 (synthetic; no production data, no credential) =="
-echo "   etcd $("$ETCD" --version 2>/dev/null | head -1 | sed 's/etcd Version: //')  work=$WORK"
+echo "   work=$WORK"
 echo
+
+# ---------------------------------------------------- PREFLIGHT: drift + skew
+# Two things this script can be WRONG about while every leg still passes.
+#
+# 1. RUNBOOK DRIFT. Leg 4 exercises the three-member command "as documented".
+#    If RUNBOOK.md is edited and this script is not, Leg 4 keeps passing against
+#    a form nobody documents any more, and the drill quietly validates a
+#    procedure no operator will ever copy. mail-api's runbook had drifted to a
+#    glob that matched none of their backups; ours can drift the same way.
+#    So: assert the runbook still contains the flags this script actually runs,
+#    and FAIL rather than skip if it does not.
+#
+# 2. VERSION SKEW. A green drill on one etcd version says nothing about a
+#    cluster running another. mail-api spent an hour on exactly this -- a
+#    pg_dump 17 file against a PostgreSQL 15 server -- and their drill detected
+#    it without DIAGNOSING it, so the failure read as a bad backup. Print the
+#    versions, and refuse to run if the three binaries disagree with each other.
+RUNBOOK=${RUNBOOK:-$(dirname "$0")/RUNBOOK.md}
+if [ -f "$RUNBOOK" ]; then
+    missing=""
+    for tok in "etcdutl snapshot restore" "--initial-cluster" "--initial-advertise-peer-urls" "--data-dir" "--name"; do
+        grep -q -- "$tok" "$RUNBOOK" || missing="$missing '$tok'"
+    done
+    [ -z "$missing" ] \
+        && ok "PREFLIGHT -- RUNBOOK.md still documents the form Leg 4 exercises" \
+        || no "PREFLIGHT drift" "RUNBOOK.md no longer contains:$missing -- Leg 4 is testing a procedure nobody documents"
+else
+    no "PREFLIGHT drift" "RUNBOOK.md not found at $RUNBOOK -- cannot confirm the drill matches the documentation"
+fi
+
+EV=$("$ETCD" --version 2>/dev/null | sed -n 's/^etcd Version: //p' | head -1)
+UV=$("$ETCDUTL" version 2>/dev/null | sed -n 's/^etcdutl version: //p' | head -1)
+CV=$("$ETCDCTL" version 2>/dev/null | sed -n 's/^etcdctl version: //p' | head -1)
+printf '  etcd=%s  etcdutl=%s  etcdctl=%s\n' "${EV:-?}" "${UV:-?}" "${CV:-?}"
+if [ "$EV" = "$UV" ] && [ "$UV" = "$CV" ] && [ -n "$EV" ]; then
+    ok "PREFLIGHT -- all three binaries are $EV; this run is evidence ONLY for that version"
+else
+    no "PREFLIGHT skew" "etcd=$EV etcdutl=$UV etcdctl=$CV -- a mixed-version run diagnoses nothing"
+fi
+echo
+
+
 
 # ---------------------------------------------------------------- build
 if start_etcd "$WORK/orig" drill-orig; then
